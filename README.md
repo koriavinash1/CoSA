@@ -1,1 +1,1 @@
-# SlotEigenDecomposition
+# SlotQuantization

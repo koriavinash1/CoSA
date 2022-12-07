@@ -1,0 +1,226 @@
+import os
+import argparse
+from dataset import *
+from model import *
+from tqdm import tqdm
+import time, math
+from datetime import datetime, timedelta
+
+import torch.optim as optim
+import torch
+import torchvision.utils as vutils
+from torch.utils.tensorboard import SummaryWriter
+
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument
+parser.add_argument('--model_dir', default='Logs', type=str, help='where to save models' )
+parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
+parser.add_argument('--data_root', default='/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3', type=str, help='where to save models' )
+parser.add_argument('--seed', default=0, type=int, help='random seed')
+parser.add_argument('--batch_size', default=32, type=int)
+
+parser.add_argument('--num_slots', default=10, type=int, help='Number of slots in Slot Attention.')
+parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
+parser.add_argument('--num_iterations', default=3, type=int, help='Number of attention iterations.')
+parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
+parser.add_argument('--learning_rate', default=0.0004, type=float)
+
+parser.add_argument('--img_size', default=128, type=int)
+parser.add_argument('--encoder_res', default=8, type=int)
+parser.add_argument('--decoder_res', default=8, type=int)
+
+parser.add_argument('--warmup_steps', default=10000, type=int, help='Number of warmup steps for the learning rate.')
+parser.add_argument('--decay_rate', default=0.5, type=float, help='Rate for the learning rate decay.')
+parser.add_argument('--decay_steps', default=100000, type=int, help='Number of steps for the learning rate decay.')
+parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
+parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
+parser.add_argument('--hyperspherical', default=False, type=bool, help='use geodesic distance')
+parser.add_argument('--unique_sampling', default=False, type=bool, help='use unique sampling')
+parser.add_argument('--use_gumblesampling', default=False, type=bool, help='use traditional VQ or gumble based quantization')
+
+
+parser.add_argument('--tau_start', type=float, default=1.0)
+parser.add_argument('--tau_final', type=float, default=0.1)
+parser.add_argument('--tau_steps', type=int, default=30000)
+
+
+# python train.py --exp_name 4img64 --img_size 64 --encoder_res 4 --decoder_res 4 --max_slots 12 --num_slots 10 --hyperspherical True --use_gumblesampling True
+
+
+opt = parser.parse_args()
+resolution = (opt.img_size, opt.img_size)
+
+opt.model_dir = os.path.join(opt.model_dir, opt.exp_name)
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
+arg_str = '__'.join(arg_str_list)
+log_dir = os.path.join(opt.model_dir, datetime.today().isoformat())
+
+os.makedirs(log_dir, exist_ok=True)
+writer = SummaryWriter(log_dir)
+writer.add_text('hparams', arg_str)
+
+model = SlotAttentionAutoEncoder(resolution, 
+                                    opt.num_slots, 
+                                    opt.num_iterations, 
+                                    opt.hid_dim,
+                                    opt.max_slots,
+                                    opt.hyperspherical,
+                                    opt.unique_sampling,
+                                    opt.use_gumblesampling,
+                                    opt.encoder_res,
+                                    opt.decoder_res).to(device)
+# model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
+
+criterion = nn.MSELoss()
+
+params = [{'params': model.parameters()}]
+
+train_set = DataGenerator(root=opt.data_root, mode='train', resolution=resolution)
+train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
+                        shuffle=True, num_workers=opt.num_workers)
+
+val_set = DataGenerator(root=opt.data_root, mode='val',  resolution=resolution)
+val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
+                        shuffle=True, num_workers=opt.num_workers)
+
+
+train_epoch_size = len(train_dataloader)
+val_epoch_size = len(val_dataloader)
+
+log_interval = train_epoch_size // 5
+
+optimizer = optim.Adam(params, lr=opt.learning_rate)
+
+
+def visualize(image, recon_orig, attns, N=8):
+    _, _, H, W = image.shape
+    attns = attns.permute(0, 1, 4, 2, 3)
+    image = image[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
+    recon_orig = recon_orig[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
+    attns = attns[:N].expand(-1, -1, 3, H, W)
+
+    return torch.cat((image, recon_orig, attns), dim=1).view(-1, 3, H, W)
+
+def linear_warmup(step, start_value, final_value, start_step, final_step):
+    
+    assert start_value <= final_value
+    assert start_step <= final_step
+    
+    if step < start_step:
+        value = start_value
+    elif step >= final_step:
+        value = final_value
+    else:
+        a = final_value - start_value
+        b = start_value
+        progress = (step + 1 - start_step) / (final_step - start_step)
+        value = a * progress + b
+    
+    return value
+
+
+def cosine_anneal(step, start_value, final_value, start_step, final_step):
+    
+    assert start_value >= final_value
+    assert start_step <= final_step
+    
+    if step < start_step:
+        value = start_value
+    elif step >= final_step:
+        value = final_value
+    else:
+        a = 0.5 * (start_value - final_value)
+        b = 0.5 * (start_value + final_value)
+        progress = (step - start_step) / (final_step - start_step)
+        value = a * math.cos(math.pi * progress) + b
+    
+    return value
+
+
+start = time.time()
+i = 0
+lr_decay_factor = 1
+for epoch in range(opt.num_epochs):
+    model.train()
+
+    total_loss = 0
+
+    for sample in tqdm(train_dataloader):
+        i += 1
+        global_step = epoch * train_epoch_size + i
+
+
+        tau = cosine_anneal(
+            global_step,
+            opt.tau_start,
+            opt.tau_final,
+            0,
+            opt.tau_steps)
+
+        lr_warmup_factor = linear_warmup(
+            global_step,
+            0.,
+            1.0,
+            0,
+            opt.warmup_steps)
+
+        if i < opt.warmup_steps:
+            learning_rate = opt.learning_rate * (i / opt.warmup_steps)
+        else:
+            learning_rate = opt.learning_rate
+
+        learning_rate = learning_rate * (opt.decay_rate ** (
+            i / opt.decay_steps))
+
+        learning_rate = lr_decay_factor * lr_warmup_factor * opt.learning_rate
+        optimizer.param_groups[0]['lr'] = learning_rate
+        
+        image = sample['image'].to(device)
+        recon_combined, recons, masks, slots, cbidxs, qloss = model(image, epoch=epoch)
+        recon_loss = ((image - recon_combined) ** 2).sum() / image.shape[0]
+
+        loss = recon_loss + qloss
+        total_loss += loss.item()
+
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        with torch.no_grad():
+            if i % log_interval == 0:            
+                writer.add_scalar('TRAIN/loss', loss.item(), global_step)
+                writer.add_scalar('TRAIN/recon', recon_loss.item(), global_step)
+                writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
+                writer.add_scalar('TRAIN/Samplingvar', torch.var(1.0*torch.unique(cbidxs)).item(), global_step)
+                writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
+
+            if (i % train_epoch_size) == train_epoch_size - 1:
+                vis_recon = visualize(image, recon_combined, recons*masks, N=32)
+                grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 2, pad_value=0.2)[:, 2:-2, 2:-2]
+                writer.add_image('TRAIN_recon/epoch={:03}'.format(epoch+1), grid)
+
+        del recons, masks, slots
+
+    total_loss /= len(train_dataloader)
+
+    print ("Epoch: {}, Loss: {}, CB_VAR: {}, Time: {}".format(epoch, total_loss, 
+                                torch.var(1.0*torch.unique(cbidxs)).item(),
+                                timedelta(seconds=time.time() - start)))
+
+    if not epoch % 10:
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            }, os.path.join(opt.model_dir, f'ckpt_{epoch}.pth'))
+
+
+    if epoch % 50 == 49:
+        lr_decay_factor *= 0.5
+        
