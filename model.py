@@ -3,6 +3,7 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+from hpenalty import hessian_penalty
 from geomstats.geometry.hypersphere import Hypersphere
 
 
@@ -52,8 +53,8 @@ class SlotAttention(nn.Module):
 
         # ===========================================
 
-        self.slots_logsigma = nn.Parameter(torch.zeros(1, 1, dim))
-        torch.nn.init.xavier_uniform_(self.slots_logsigma)
+        # self.slots_logsigma = nn.Parameter(torch.zeros(1, 1, dim))
+        # torch.nn.init.xavier_uniform_(self.slots_logsigma)
 
 
         self.anchorsto_k = nn.Sequential(nn.Linear(ntokens, ntokens),
@@ -193,7 +194,9 @@ class SlotAttention(nn.Module):
         shape = z.shape
 
         z_flattened = z.reshape(-1, self.dim)
-        transformed_slots = self.to_q(self.embedding.weight)
+        self.embedding.weight.requires_grad = True
+        with torch.no_grad():
+            transformed_slots = self.to_q(self.embedding.weight)
 
 
         if not self.hyperspherical:
@@ -302,37 +305,47 @@ class SlotAttention(nn.Module):
         n_s = num_slots if num_slots is not None else self.num_slots
         
         # compute slots w.r.t feature_keys
-        inputs_without_position = self.encoder_transformation(inputs, position = False)
-        k_noposition = self.to_k(inputs_without_position)
+
+        def __combined__(inputs):
+            inputs_without_position = self.encoder_transformation(inputs, position = False)
+            inputs_without_position = self.norm_input(inputs_without_position)
+            k_noposition = self.to_k(inputs_without_position)
+            return k_noposition
+        
+        k_noposition = __combined__(inputs)
+        hp = hessian_penalty(__combined__, z = inputs, G_z=k_noposition)
 
         eigen_basis, eigen_values = self.passthrough_eigen_basis(k_noposition, n_s)
-        object_vectors = self.masked_projection(inputs_without_position, eigen_basis)   
-        object_vectors = F.layer_norm(object_vectors, object_vectors.shape[1:])
+        object_vectors = self.masked_projection(k_noposition, eigen_basis)   
         
 
         # update codebook with object vectors
-        _, _, qloss = self.sample_slots(F.normalize(object_vectors, p=2, dim=2), update = 0, unique = True)
+        _, _, qloss = self.sample_slots(object_vectors, update = 0, unique = True)
 
-
-        # input with position encoding
-        inputs = self.encoder_transformation(inputs)
-        k, v= self.to_k(inputs), self.to_v(inputs)
-
-
-        slots, cbidxs, transformation_loss = self.sample_slots(F.normalize(k, p=2, dim=2), update = 2, unique = False)
-        slots = slots[:, :n_s, :]
-        qloss += transformation_loss
 
         # add slot noise...
-        sigma = self.slots_logsigma.exp().expand(b, n_s, -1)
-        slots = slots + sigma * torch.randn(slots.shape).to(inputs.device)
+        # sigma = self.slots_logsigma.exp().expand(b, n_s, -1)
+        # slots = slots + sigma * torch.randn(slots.shape).to(inputs.device)
 
+        # input with position encoding
+        with torch.no_grad():
+            slots, cbidxs, transformation_loss = self.sample_slots(k_noposition, update = 2, unique = False)
+            slots = slots[:, :n_s, :]; cbidxs = cbidxs[:, :n_s]
+
+            inputs = self.encoder_transformation(inputs)
+            inputs = self.norm_input(inputs)
+
+        
+        k = k_noposition # self.to_k(inputs)
+        v = self.to_v(inputs)
 
         for _ in range(self.iters):
             slots_prev = slots
 
             slots = self.norm_slots(slots)
             q = self.to_q(slots)
+            hp += hessian_penalty(self.to_q, z = slots, G_z=q)
+
 
             dots = torch.einsum('bid,bjd->bij', q, k) * self.scale
             attn = dots.softmax(dim=1) + self.eps
@@ -348,7 +361,9 @@ class SlotAttention(nn.Module):
             slots = slots.reshape(b, -1, d)
             slots = slots + self.mlp(self.norm_pre_ff(slots))
 
-        return slots, cbidxs, qloss, self.decoder_transformation(slots)
+        # qloss += transformation_loss
+        qloss += 2*hp
+        return slots, cbidxs, 2*qloss, self.decoder_transformation(slots)
 
 
 

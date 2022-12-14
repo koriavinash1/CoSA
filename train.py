@@ -17,7 +17,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 parser = argparse.ArgumentParser()
 
 parser.add_argument
-parser.add_argument('--model_dir', default='Logs', type=str, help='where to save models' )
+parser.add_argument('--model_dir', default='Logs2', type=str, help='where to save models' )
 parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
 parser.add_argument('--data_root', default='/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3', type=str, help='where to save models' )
 parser.add_argument('--seed', default=0, type=int, help='random seed')
@@ -212,7 +212,7 @@ for epoch in range(opt.num_epochs):
     total_loss /= len(train_dataloader)
 
     print ("Epoch: {}, Loss: {}, CB_VAR: {}, Time: {}".format(epoch, total_loss, 
-                                torch.var(1.0*torch.unique(cbidxs)).item(),
+                                torch.unique(cbidxs),
                                 timedelta(seconds=time.time() - start)))
 
     if not epoch % 10:
