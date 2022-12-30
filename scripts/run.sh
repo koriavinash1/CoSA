@@ -10,7 +10,7 @@ VAR=$9
 NAME=${10}
 
 
-LOGS='/vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/LOGS191222'
+LOGS='/vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/LOGS23'
 python /vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/train.py \
                                             --exp_name $NAME \
                                             --batch_size 16 \

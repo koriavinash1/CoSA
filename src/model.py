@@ -177,10 +177,10 @@ class SlotAttention(nn.Module):
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
         # ========================
-        inputs_features = self.encoder_transformation(inputs, position = False)
+        inputs_features = self.encoder_transformation(inputs, position = True)
         inputs_features = self.norm_input(inputs_features)
 
-        mu = 0
+
         if self.quantize:
             # compute slots w.r.t feature_keys
             # with torch.no_grad():
@@ -192,7 +192,6 @@ class SlotAttention(nn.Module):
 
             eigen_basis, eigen_values = self.passthrough_eigen_basis(inputs_features)
             objects = self.masked_projection(inputs_features, eigen_basis)   
-            objects = F.normalize(objects, dim=-1)
 
             # context loss
             qloss += F.mse_loss(objects.mean(1), inputs_features.mean(1))
@@ -206,6 +205,7 @@ class SlotAttention(nn.Module):
                                                     reset_usage = (batch == 0))
             qloss += qloss1 
 
+            if (epoch==5) and (batch==0): self.slot_quantizer.entire_cb_restart()
 
             # sample objects
             # objects, cbidxs, _ = self.slot_quantizer.sample(inputs_features, unique=False)
@@ -225,8 +225,6 @@ class SlotAttention(nn.Module):
         slots = torch.normal(mu, sigma)
         
         # slots = self.positional_encoder(slots)
-
-
 
         k = self.to_k(objects)
         v = self.to_v(objects)
@@ -262,10 +260,9 @@ class SlotAttention(nn.Module):
                                                         loss_type=1,
                                                         nunique=self.nunique_slots)
             qloss += 0.1*qloss1
+
             # qloss += 0.1*F.mse_loss(slots.mean(1), inputs_features.mean(1))
-
             # slots, cbidxs, _ = self.slot_quantizer.sample(inputs_features, unique=False)
-
             slots = self.slot_transformation(slots)
 
         """

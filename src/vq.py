@@ -141,6 +141,18 @@ class VectorQuantizer(nn.Module):
             self._embedding.weight[dead_codes] = rand_codes
         self._embedding.weight.requires_grad = True
 
+
+    def entire_cb_restart(self):
+        mean = self._embedding.weight.mean(0).unsqueeze(0)
+        var = self._embedding.weight.var(0).unsqueeze(0)
+        eps = torch.randn((self._num_embeddings, self._embedding_dim)).to(var.device)
+        rand_codes = eps*var + mean
+
+        with torch.no_grad():
+            self._embedding.weight = rand_codes
+        self._embedding.weight.requires_grad = True
+
+
     def sample(self, features, unique=False):
         input_shape = features.shape
         features = features.view(-1, self._embedding_dim)
@@ -321,6 +333,17 @@ class VectorQuantizerEMA(nn.Module):
             self._embedding.weight[dead_codes] = rand_codes
         self._embedding.weight.requires_grad = True
         # print ('Restarting dead cb embeddings...: ', len(dead_codes))
+
+
+    def entire_cb_restart(self):
+        mean = self._embedding.weight.mean(0).unsqueeze(0)
+        var = self._embedding.weight.var(0).unsqueeze(0)
+        eps = torch.randn((self._num_embeddings, self._embedding_dim)).to(var.device)
+        rand_codes = eps*var + mean
+
+        with torch.no_grad():
+            self._embedding.weight[:] = rand_codes
+        self._embedding.weight.requires_grad = True
 
 
     def sample(self, features, unique=False, nunique=-1):
