@@ -1,7 +1,7 @@
 import os
 import argparse
-from dataset import *
-from model import *
+from src.dataset import *
+from src.model import *
 from tqdm import tqdm
 import time, math
 from datetime import datetime, timedelta

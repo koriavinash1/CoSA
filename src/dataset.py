@@ -17,14 +17,22 @@ class DataGenerator(Dataset):
         self.root_dir = root     
         self.resolution = resolution
         self.files = os.listdir(os.path.join(self.root_dir, self.mode, 'images'))
+        # self.files = self.files[:1000]
         self.img_transform = transforms.Compose([
-                                transforms.ToTensor()])
+                                        transforms.Resize(resolution),
+                                        # transforms.RandomAffine(15, 
+                                        #                         translate=(0.15, 0.15), 
+                                        #                         scale=(0.8, 1.2), 
+                                        #                         shear=0.0),
+                                        transforms.ToTensor(),
+                                        # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+                                    ])
 
 
     def __getitem__(self, index):
         path = self.files[index]
         image = Image.open(os.path.join(self.root_dir, self.mode, 'images', path)).convert("RGB")
-        image = image.resize(self.resolution)
+        # image = image.resize(self.resolution)
         image = self.img_transform(image)
         sample = {'image': image}
 

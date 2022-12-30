@@ -1,7 +1,7 @@
 import os
 import argparse
-from dataset import *
-from model import *
+from src.dataset import *
+from src.model import *
 from tqdm import tqdm
 import time, math
 from datetime import datetime, timedelta
@@ -16,8 +16,11 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument
-parser.add_argument('--model_dir', default='Logs2', type=str, help='where to save models' )
+def str2bool(v):
+    return v.lower() in ('true', '1')
+
+
+parser.add_argument('--model_dir', default='Logs', type=str, help='where to save models' )
 parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
 parser.add_argument('--data_root', default='/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3', type=str, help='where to save models' )
 parser.add_argument('--seed', default=0, type=int, help='random seed')
@@ -25,7 +28,7 @@ parser.add_argument('--batch_size', default=32, type=int)
 
 parser.add_argument('--num_slots', default=10, type=int, help='Number of slots in Slot Attention.')
 parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
-parser.add_argument('--num_iterations', default=3, type=int, help='Number of attention iterations.')
+parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
 parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
 parser.add_argument('--learning_rate', default=0.0004, type=float)
 
@@ -38,17 +41,22 @@ parser.add_argument('--decay_rate', default=0.5, type=float, help='Rate for the 
 parser.add_argument('--decay_steps', default=100000, type=int, help='Number of steps for the learning rate decay.')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
-parser.add_argument('--hyperspherical', default=False, type=bool, help='use geodesic distance')
-parser.add_argument('--unique_sampling', default=False, type=bool, help='use unique sampling')
-parser.add_argument('--use_gumblesampling', default=False, type=bool, help='use traditional VQ or gumble based quantization')
+
+parser.add_argument('--quantize', default=False, type=str2bool, help='perform slot quantization')
+parser.add_argument('--cosine', default=False, type=str2bool, help='use geodesic distance')
+parser.add_argument('--unique_sampling', default=False, type=str2bool, help='use unique sampling')
 
 
 parser.add_argument('--tau_start', type=float, default=1.0)
 parser.add_argument('--tau_final', type=float, default=0.1)
 parser.add_argument('--tau_steps', type=int, default=30000)
 
+parser.add_argument('--nunique_objects', type=int, default=8)
+parser.add_argument('--variational', type=str2bool, default=False)
+parser.add_argument('--overlap_weightage', type=float, default=0.0)
+parser.add_argument('--cb_decay', type=float, default=0.0)
 
-# python train.py --exp_name 4img64 --img_size 64 --encoder_res 4 --decoder_res 4 --max_slots 12 --num_slots 10 --hyperspherical True --use_gumblesampling True
+
 
 
 opt = parser.parse_args()
@@ -71,11 +79,14 @@ model = SlotAttentionAutoEncoder(resolution,
                                     opt.num_iterations, 
                                     opt.hid_dim,
                                     opt.max_slots,
-                                    opt.hyperspherical,
+                                    opt.nunique_objects,
+                                    opt.quantize,
+                                    opt.cosine,
                                     opt.unique_sampling,
-                                    opt.use_gumblesampling,
+                                    opt.cb_decay,
                                     opt.encoder_res,
-                                    opt.decoder_res).to(device)
+                                    opt.decoder_res,
+                                    opt.variational).to(device)
 # model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
 
 criterion = nn.MSELoss()
@@ -98,6 +109,7 @@ log_interval = train_epoch_size // 5
 
 optimizer = optim.Adam(params, lr=opt.learning_rate)
 
+# criterion = nn.MSELoss()
 
 def visualize(image, recon_orig, attns, N=8):
     _, _, H, W = image.shape
@@ -105,7 +117,6 @@ def visualize(image, recon_orig, attns, N=8):
     image = image[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
     recon_orig = recon_orig[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
     attns = attns[:N].expand(-1, -1, 3, H, W)
-
     return torch.cat((image, recon_orig, attns), dim=1).view(-1, 3, H, W)
 
 def linear_warmup(step, start_value, final_value, start_step, final_step):
@@ -144,6 +155,50 @@ def cosine_anneal(step, start_value, final_value, start_step, final_step):
     return value
 
 
+class SoftDiceLossV1(nn.Module):
+    '''
+    soft-dice loss, useful in binary segmentation
+    '''
+    def __init__(self,
+                 p=1,
+                 smooth=0.001):
+        super(SoftDiceLossV1, self).__init__()
+        self.p = p
+        self.smooth = smooth
+
+    def forward(self, logits, labels):
+        '''
+        inputs:
+            logits: tensor of shape (N, H, W, ...)
+            label: tensor of shape(N, H, W, ...)
+        output:
+            loss: tensor of shape(1, )
+        '''
+        probs = torch.sigmoid(logits)
+        numer = (probs * labels).sum()
+        denor = (probs.pow(self.p) + labels.pow(self.p)).sum()
+        loss = (2 * numer + self.smooth) / (denor + self.smooth)
+        return loss
+    
+
+_dice_loss_ = SoftDiceLossV1()
+
+def dice_loss(masks):
+    shape = masks.shape
+    idxs = np.arange(shape[1])
+    gt_masks = masks.clone().detach()
+    gt_masks[gt_masks >= 0.5] = 1.0
+    gt_masks[gt_masks < 0.5] = 0.0
+    
+    loss = 0
+    for i in idxs:
+        _idxs_ = list(np.arange(shape[1]))
+        del _idxs_[i]
+        loss += _dice_loss_(masks[:, _idxs_, ...].reshape(-1, shape[2], shape[3], shape[4]),
+            gt_masks[:, i, ...].unsqueeze(1).repeat(1, len(idxs) -1, 1, 1, 1).reshape(-1, shape[2], shape[3], shape[4]))
+
+    return loss*1.0/len(idxs)
+
 start = time.time()
 i = 0
 lr_decay_factor = 1
@@ -152,7 +207,7 @@ for epoch in range(opt.num_epochs):
 
     total_loss = 0
 
-    for sample in tqdm(train_dataloader):
+    for ibatch, sample in tqdm(enumerate(train_dataloader)):
         i += 1
         global_step = epoch * train_epoch_size + i
 
@@ -183,10 +238,12 @@ for epoch in range(opt.num_epochs):
         optimizer.param_groups[0]['lr'] = learning_rate
         
         image = sample['image'].to(device)
-        recon_combined, recons, masks, slots, cbidxs, qloss = model(image, epoch=epoch)
-        recon_loss = ((image - recon_combined) ** 2).sum() / image.shape[0]
+        recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, epoch=epoch, batch=ibatch)
+        recon_loss = ((image - recon_combined)**2).mean()
+        
+        overlap_loss = dice_loss(masks)
+        loss = recon_loss + 0.5*qloss #+ opt.overlap_weightage*overlap_loss
 
-        loss = recon_loss + qloss
         total_loss += loss.item()
 
 
@@ -198,12 +255,15 @@ for epoch in range(opt.num_epochs):
             if i % log_interval == 0:            
                 writer.add_scalar('TRAIN/loss', loss.item(), global_step)
                 writer.add_scalar('TRAIN/recon', recon_loss.item(), global_step)
+                writer.add_scalar('TRAIN/overlap', overlap_loss.item(), global_step)
+                writer.add_scalar('TRAIN/perplexity', perplexity.item(), global_step)
                 writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
-                writer.add_scalar('TRAIN/Samplingvar', torch.var(1.0*torch.unique(cbidxs)).item(), global_step)
+                writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
                 writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
 
             if (i % train_epoch_size) == train_epoch_size - 1:
-                vis_recon = visualize(image, recon_combined, recons*masks, N=32)
+                attns = recons * masks + (1 - masks)
+                vis_recon = visualize(image, recon_combined, attns, N=32)
                 grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 2, pad_value=0.2)[:, 2:-2, 2:-2]
                 writer.add_image('TRAIN_recon/epoch={:03}'.format(epoch+1), grid)
 
@@ -211,13 +271,15 @@ for epoch in range(opt.num_epochs):
 
     total_loss /= len(train_dataloader)
 
-    print ("Epoch: {}, Loss: {}, CB_VAR: {}, Time: {}".format(epoch, total_loss, 
-                                torch.unique(cbidxs),
-                                timedelta(seconds=time.time() - start)))
+    print ("EXP: {}, Epoch: {}, RECON:{}, Loss: {}, CB_VAR: {}, Time: {}".format(opt.exp_name,
+                                                        epoch, recon_loss.item(), total_loss, 
+                                                        torch.unique(cbidxs),
+                                                        timedelta(seconds=time.time() - start)))
 
     if not epoch % 10:
         torch.save({
             'model_state_dict': model.state_dict(),
+            'epoch': epoch
             }, os.path.join(opt.model_dir, f'ckpt_{epoch}.pth'))
 
 
