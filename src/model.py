@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from src.vq import VectorQuantizer, VectorQuantizerEMA
 from src.hpenalty import hessian_penalty
+from src.utils import compute_eigen
 from geomstats.geometry.hypersphere import Hypersphere
 
 
@@ -119,7 +120,6 @@ class SlotAttention(nn.Module):
         else:
             features = torch.flatten(features, 1, 2)
             features = self.encoder_norm(features)
-            features = self.encoder_feature_mlp(features)
 
         return features
 
@@ -143,15 +143,51 @@ class SlotAttention(nn.Module):
         # eigen_vectors = (eigen_vectors - torch.min(eigen_vectors, dim=-1, keepdim=True)[0])/ (torch.max(eigen_vectors, dim=-1, keepdim=True)[0] - torch.min(eigen_vectors, dim=-1, keepdim=True)[0])
         # eigen_vectors = eigen_vectors / torch.max(eigen_vectors, dim=-1, keepdim=True)[0]
 
-        eigen_vectors = eigen_vectors[:, :, -self.nunique_slots+1:].permute(0, 2, 1)
-        eigen_values = eigen_values[:, -self.nunique_slots+1:]
+        # eigen_vectors = eigen_vectors[:, :, -self.nunique_slots+1:].permute(0, 2, 1)
+        # eigen_values = eigen_values[:, -self.nunique_slots+1:]
 
-        eigen_vectors = eigen_vectors.softmax(dim = 1) + self.eps
-        eigen_vectors = eigen_vectors/torch.sum(eigen_vectors, dim =-1, keepdim=True)
+        eigen_vectors = eigen_vectors.permute(0, 2, 1)
+        eigen_values = eigen_values
+        
+        eigen_vectors = eigen_vectors.softmax(dim = -1) + self.eps
+        # eigen_vectors = eigen_vectors/torch.sum(eigen_vectors, dim =-1, keepdim=True)
 
+        eigen_vectors = torch.flip(eigen_vectors, [1])
+        eigen_values = torch.flip(eigen_values, [1])
         return eigen_vectors, eigen_values
 
-    
+
+    def extract_eigen_basis(self, features, batch=None):
+        batched_concepts = []
+        batched_scale = []
+
+        shape = features.shape
+
+
+        for i, feature in enumerate(features):            
+            eigen_vectors, eigen_values = compute_eigen(feature, 
+                                        image = None if batch is None else batch[i],
+                                        K = shape[1],# self.nunique_slots+1, 
+                                        which_matrix = 'matting_laplacian',
+                                        normalize  = True,
+                                        lapnorm = True,
+                                        threshold_at_zero = True,
+                                        image_color_lambda = 0 if batch is None else 10)
+
+            batched_concepts.append(eigen_vectors.unsqueeze(0))
+            batched_scale.append(eigen_values.unsqueeze(0))
+        
+        batched_scale = torch.cat(batched_scale, 0).to(features.device)
+        batched_concepts = torch.cat(batched_concepts, 0).to(features.device)
+        
+        batched_concepts = batched_concepts.softmax(dim = -1) + self.eps
+        # batched_concepts = batched_concepts/torch.sum(batched_concepts, dim =-1, keepdim=True)
+
+        batched_concepts = torch.flip(batched_concepts, [1])
+        batched_scale = torch.flip(batched_scale, [1])
+        return batched_concepts, batched_scale
+
+
     def masked_projection(self, features, z):
         # features: B x nanchors x f
         # z: basis B x K x nanchors
@@ -168,7 +204,7 @@ class SlotAttention(nn.Module):
 
 
 
-    def forward(self, inputs, num_slots = None, epoch=0, batch= 0, train = True):
+    def forward(self, inputs, num_slots = None, epoch=0, batch= 0, train = True, images=None):
         b, d, w, h = inputs.shape
         n_s = num_slots if num_slots is not None else self.num_slots        
         
@@ -180,32 +216,30 @@ class SlotAttention(nn.Module):
         inputs_features = self.encoder_transformation(inputs, position = True)
         inputs_features = self.norm_input(inputs_features)
 
+        inputs_features_no_position = self.encoder_transformation(inputs, position = False)
 
         if self.quantize:
-            # compute slots w.r.t feature_keys
-            # with torch.no_grad():
-            #     inputs_without_position = self.encoder_transformation(inputs, position = False)
-            #     inputs_without_position = self.norm_input(inputs_without_position)
+            # eigen_basis, eigen_values = self.passthrough_eigen_basis(inputs_features_no_position)
+            eigen_basis, eigen_values = self.extract_eigen_basis(inputs_features_no_position, batch=images)
+            objects = self.masked_projection(inputs_features_no_position, eigen_basis)   
 
-            # # preserve gradients
-            # inputs_without_position = inputs_flattened + (inputs_without_position - inputs_flattened).detach()
-
-            eigen_basis, eigen_values = self.passthrough_eigen_basis(inputs_features)
-            objects = self.masked_projection(inputs_features, eigen_basis)   
 
             # context loss
-            qloss += F.mse_loss(objects.mean(1), inputs_features.mean(1))
+            qloss += F.mse_loss(objects.mean(1), inputs_features_no_position.mean(1))
 
 
             # update codebook with object vectors
+            inputs_features_no_position = objects
+            
             qloss1, _, _, _ = self.slot_quantizer(objects, 
                                                     avg = False, 
                                                     unique=True,
                                                     loss_type = 0, 
+                                                    nunique=self.nunique_slots +1,
                                                     reset_usage = (batch == 0))
             qloss += qloss1 
 
-            if (epoch==5) and (batch==0): self.slot_quantizer.entire_cb_restart()
+            if (epoch % 5 == 4) and (batch==0) and (epoch < 25): self.slot_quantizer.entire_cb_restart()
 
             # sample objects
             # objects, cbidxs, _ = self.slot_quantizer.sample(inputs_features, unique=False)
@@ -215,19 +249,15 @@ class SlotAttention(nn.Module):
             # slots = object_vectors[:, :n_s, :]
             # cbidxs = cbidxs[:,:n_s]
 
-        else:
-            objects = inputs_features
-
 
         # ==================================
         mu = self.slots_mu.expand(b, n_s, -1)
         sigma = torch.exp(0.5*self.slots_sigma.expand(b, n_s, -1))
         slots = torch.normal(mu, sigma)
         
-        # slots = self.positional_encoder(slots)
 
-        k = self.to_k(objects)
-        v = self.to_v(objects)
+        k = self.to_k(inputs_features)
+        v = self.to_v(inputs_features)
 
         for _ in range(self.iters):
             slots_prev = slots
@@ -249,21 +279,20 @@ class SlotAttention(nn.Module):
 
             slots = slots.reshape(b, -1, d)
             slots = slots + self.mlp(self.norm_pre_ff(slots))
-
+            slots = self.positional_encoder(slots)
 
         # quantize slots
         if self.quantize:
-            qloss1, slots, perplexity, cbidxs = self.slot_quantizer(slots, 
+            qloss1, qslots, perplexity, cbidxs = self.slot_quantizer(slots, 
                                                         avg=False, 
                                                         unique=True, 
                                                         update=False,
                                                         loss_type=1,
-                                                        nunique=self.nunique_slots)
-            qloss += 0.1*qloss1
+                                                        nunique=self.nunique_slots+1)
+            qloss += qloss1
+            qslots = self.slot_transformation(qslots)
 
-            # qloss += 0.1*F.mse_loss(slots.mean(1), inputs_features.mean(1))
-            # slots, cbidxs, _ = self.slot_quantizer.sample(inputs_features, unique=False)
-            slots = self.slot_transformation(slots)
+            if np.random.randn() > 0.5: slots = qslots
 
         """
         if self.quantize and (epoch > 10):
@@ -419,7 +448,7 @@ class SlotAttentionAutoEncoder(nn.Module):
         # `x` has shape: [batch_size, input_size, width, height].
 
         # Slot Attention module.
-        slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, num_slots, epoch, batch)
+        slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, num_slots, epoch, batch, images=image)
         # `slots` has shape: [batch_size, num_slots, slot_size].
         # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
 
