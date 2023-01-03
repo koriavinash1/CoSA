@@ -246,13 +246,14 @@ class SlotAttention(nn.Module):
             # if (epoch % 5 == 4) and (batch==0) and (epoch < 25): self.slot_quantizer.entire_cb_restart()
 
             # sample objects
-            objects, cbidxs, _ = self.slot_quantizer.sample(k, 
-                                                            unique=True,
-                                                            nunique=self.nunique_slots +1)
+            objects, cbidxs, _ = self.slot_quantizer.sample(k)
+                                                            # , 
+                                                            # unique=True,
+                                                            # nunique=self.nunique_slots +1)
 
 
             slots = objects[:, :n_s, :]
-            cbidxs = cbidxs[:,:n_s]
+            cbidxs = cbidxs[:, :n_s]
         else:
             mu = self.slots_mu.expand(b, n_s, -1)
             sigma = torch.exp(0.5*self.slots_sigma.expand(b, n_s, -1))

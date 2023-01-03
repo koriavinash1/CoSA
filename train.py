@@ -206,6 +206,7 @@ for epoch in range(opt.num_epochs):
     model.train()
 
     total_loss = 0
+    idxs = []
 
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         i += 1
@@ -251,6 +252,8 @@ for epoch in range(opt.num_epochs):
         loss.backward()
         optimizer.step()
 
+        idxs.append(cbidxs)
+
         with torch.no_grad():
             if i % log_interval == 0:            
                 writer.add_scalar('TRAIN/loss', loss.item(), global_step)
@@ -270,10 +273,10 @@ for epoch in range(opt.num_epochs):
         del recons, masks, slots
 
     total_loss /= len(train_dataloader)
-
+    idxs = torch.cat(idxs, 0)
     print ("EXP: {}, Epoch: {}, RECON:{}, Loss: {}, CB_VAR: {}, Time: {}".format(opt.exp_name,
                                                         epoch, recon_loss.item(), total_loss, 
-                                                        torch.unique(cbidxs),
+                                                        torch.unique(idxs),
                                                         timedelta(seconds=time.time() - start)))
 
     if not epoch % 10:
