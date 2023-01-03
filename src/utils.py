@@ -104,6 +104,7 @@ def compute_eigen(
     K: int = 4, 
     which_matrix: str = 'affinity_torch',
     normalize: bool = True,
+    binarize: bool = True,
     lapnorm: bool = True,
     threshold_at_zero: bool = False,
     image_color_lambda: float = 10,
@@ -111,6 +112,14 @@ def compute_eigen(
 
     if normalize:
         feats = F.normalize(feats, p=2, dim=-1)
+
+    if binarize:
+        # apply softmax on token dimension 
+        # feats = troch.softmax(feats, dim = 1)
+        
+        feats = torch.sigmoid(feats)
+        feats[feats >= 0.5] = 1
+        feats[feats < 0.5] = 0
 
     # Eigenvectors of affinity matrix
     if which_matrix == 'affinity_torch':

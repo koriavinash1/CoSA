@@ -29,7 +29,7 @@ def unique_sampling_fn(distances, nunique=-1):
         sampled_vectors = []
         sampled_distances = []
         for i in range(S):
-            if len(sampled_vectors) <= nunique:
+            if i < nunique:
                 for k in range(N):
                     current_idx = sorted_idx[i, k]
                     if not (current_idx in sampled_vectors):
@@ -278,12 +278,14 @@ class VectorQuantizerEMA(nn.Module):
         self._embedding = nn.Embedding(self._num_embeddings, self._embedding_dim)
         self._embedding.weight.data.uniform_(-1/self._num_embeddings, 1/self._num_embeddings)
         self._get_distance = get_euclidian_distance
+        self.loss_fn = F.mse_loss
 
         if self._cosine:
             sphere = Hypersphere(dim=self._embedding_dim - 1)
             points_in_manifold = torch.Tensor(sphere.random_uniform(n_samples=self._num_embeddings))
             self._embedding.weight.data.copy_(points_in_manifold)
             self._get_distance = get_cosine_distance
+            self.loss_fn = lambda x1,x2: 1 - F.cosine_similarity(x1, x2).mean()
 
 
 
@@ -349,7 +351,7 @@ class VectorQuantizerEMA(nn.Module):
     def sample(self, features, unique=False, nunique=-1):
         input_shape = features.shape
         features = features.view(-1, self._embedding_dim)
-
+        
         # Calculate distances
         distances = self._get_distance(features, self._embedding.weight)
 
@@ -369,7 +371,7 @@ class VectorQuantizerEMA(nn.Module):
 
         encodings = torch.zeros(encoding_indices.shape[0], self._num_embeddings, device=features.device)
         encodings.scatter_(1, encoding_indices, 1)
-        
+
         # Quantize and unflatten
         quantized = torch.matmul(encodings, self._embedding.weight).view(input_shape)
         return quantized, encoding_indices, encodings
@@ -431,11 +433,11 @@ class VectorQuantizerEMA(nn.Module):
 
         # Loss
         if not avg:
-            e_latent_loss = F.mse_loss(quantized.detach(), inputs)
-            q_latent_loss = F.mse_loss(quantized, inputs.detach())
+            e_latent_loss = self.loss_fn(quantized.detach(), inputs)
+            q_latent_loss = self.loss_fn(quantized, inputs.detach())
         else:
-            e_latent_loss = F.mse_loss(quantized.mean(1).detach(), inputs.mean(1))
-            q_latent_loss = F.mse_loss(quantized.mean(1), inputs.mean(1).detach())
+            e_latent_loss = self.loss_fn(quantized.mean(1).detach(), inputs.mean(1))
+            q_latent_loss = self.loss_fn(quantized.mean(1), inputs.mean(1).detach())
 
 
         if loss_type == 0:

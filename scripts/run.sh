@@ -21,6 +21,7 @@ python /vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/train.p
                                             --learning_rate 0.001 \
                                             --cb_decay $CBDECAY \
                                             --nunique_objects $NCONCEPTS \
+                                            --max_slots $((2*$NCONCEPTS + 2)) \
                                             --overlap_weightage $OPWEIGHTAGE \
                                             --quantize $QUANTIZE \
                                             --cosine $COSINE \

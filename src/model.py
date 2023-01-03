@@ -67,9 +67,6 @@ class SlotAttention(nn.Module):
         self.decoder_initial_res = decoder_intial_res
 
         # ===========================================
-        self.slots_mu    = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
-        self.slots_sigma = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
-    
 
         self.to_q = nn.Linear(dim, dim)
         self.to_k = nn.Linear(dim, dim)
@@ -107,6 +104,11 @@ class SlotAttention(nn.Module):
                                                     cosine=cosine,
                                                     variational=cb_variational)
                 print ('VQVAE model', cb_decay)
+        else:         
+            self.slots_mu    = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
+            self.slots_sigma = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
+    
+
 
 
     def encoder_transformation(self, features, position=True):
@@ -170,6 +172,7 @@ class SlotAttention(nn.Module):
                                         K = shape[1],# self.nunique_slots+1, 
                                         which_matrix = 'matting_laplacian',
                                         normalize  = True,
+                                        binarize = True,
                                         lapnorm = True,
                                         threshold_at_zero = True,
                                         image_color_lambda = 0 if batch is None else 10)
@@ -216,48 +219,46 @@ class SlotAttention(nn.Module):
         inputs_features = self.encoder_transformation(inputs, position = True)
         inputs_features = self.norm_input(inputs_features)
 
-        inputs_features_no_position = self.encoder_transformation(inputs, position = False)
+
+        inputs_features_noposition = self.encoder_transformation(inputs, position = False)
+
+        k = self.to_k(inputs_features_noposition)
+        v = self.to_v(inputs_features)
+
 
         if self.quantize:
-            # eigen_basis, eigen_values = self.passthrough_eigen_basis(inputs_features_no_position)
-            eigen_basis, eigen_values = self.extract_eigen_basis(inputs_features_no_position, batch=images)
-            objects = self.masked_projection(inputs_features_no_position, eigen_basis)   
-
+            # eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
+            eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
+            objects = self.masked_projection(k, eigen_basis)   
 
             # context loss
-            qloss += F.mse_loss(objects.mean(1), inputs_features_no_position.mean(1))
+            qloss += F.mse_loss(objects.mean(1), k.mean(1))
 
-
-            # update codebook with object vectors
-            inputs_features_no_position = objects
             
             qloss1, _, _, _ = self.slot_quantizer(objects, 
                                                     avg = False, 
                                                     unique=True,
-                                                    loss_type = 0, 
                                                     nunique=self.nunique_slots +1,
-                                                    reset_usage = (batch == 0))
+                                                    loss_type = 0)
+                                                    # reset_usage = (batch == 0))
             qloss += qloss1 
 
-            if (epoch % 5 == 4) and (batch==0) and (epoch < 25): self.slot_quantizer.entire_cb_restart()
+            # if (epoch % 5 == 4) and (batch==0) and (epoch < 25): self.slot_quantizer.entire_cb_restart()
 
             # sample objects
-            # objects, cbidxs, _ = self.slot_quantizer.sample(inputs_features, unique=False)
+            objects, cbidxs, _ = self.slot_quantizer.sample(k, 
+                                                            unique=True,
+                                                            nunique=self.nunique_slots +1)
 
 
-            # qloss += qloss2
-            # slots = object_vectors[:, :n_s, :]
-            # cbidxs = cbidxs[:,:n_s]
-
-
-        # ==================================
-        mu = self.slots_mu.expand(b, n_s, -1)
-        sigma = torch.exp(0.5*self.slots_sigma.expand(b, n_s, -1))
-        slots = torch.normal(mu, sigma)
+            slots = objects[:, :n_s, :]
+            cbidxs = cbidxs[:,:n_s]
+        else:
+            mu = self.slots_mu.expand(b, n_s, -1)
+            sigma = torch.exp(0.5*self.slots_sigma.expand(b, n_s, -1))
+            slots = torch.normal(mu, sigma)
         
 
-        k = self.to_k(inputs_features)
-        v = self.to_v(inputs_features)
 
         for _ in range(self.iters):
             slots_prev = slots
@@ -282,23 +283,18 @@ class SlotAttention(nn.Module):
             slots = self.positional_encoder(slots)
 
         # quantize slots
-        if self.quantize:
-            qloss1, qslots, perplexity, cbidxs = self.slot_quantizer(slots, 
-                                                        avg=False, 
-                                                        unique=True, 
-                                                        update=False,
-                                                        loss_type=1,
-                                                        nunique=self.nunique_slots+1)
-            qloss += qloss1
-            qslots = self.slot_transformation(qslots)
+        # if self.quantize:
+        #     qloss1, qslots, perplexity, cbidxs = self.slot_quantizer(slots, 
+        #                                                 avg=False, 
+        #                                                 unique=True, 
+        #                                                 update=False,
+        #                                                 loss_type=0,
+        #                                                 nunique=self.nunique_slots+1)
+        #     qloss += qloss1
+        #     qslots = self.slot_transformation(qslots)
+        #     slots = qslots
 
-            if np.random.randn() > 0.5: slots = qslots
 
-        """
-        if self.quantize and (epoch > 10):
-            qloss2, slots, perplexity, cbidxs = self.slot_quantizer(slots, reset_usage = (batch == 0))
-            qloss += qloss2
-        """
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
 
 
