@@ -112,48 +112,45 @@ def compute_eigen(
 
     if normalize:
         feats = F.normalize(feats, p=2, dim=-1)
+    
+
+    W = feats @ feats.T
+    if threshold_at_zero:
+        W = (W * (W > 0))
+
 
     if binarize:
         # apply softmax on token dimension 
-        # feats = torch.softmax(feats, dim = 1)
-        # feats = feats / feats.sum(dim=-1, keepdim=True)
+        W = torch.softmax(W, dim = 1)
+        W = W / W.sum(dim=-1, keepdim=True)
         
-        feats = torch.sigmoid(feats)
-        feats[feats >= 0.5] = 1
-        feats[feats < 0.5] = 0
+        # W = torch.sigmoid(W)
+        # W[W >= 0.5] = 1
+        # W[W < 0.5] = 0
+
 
     # Eigenvectors of affinity matrix
     if which_matrix == 'affinity_torch':
-        W = feats @ feats.T
-        if threshold_at_zero:
-            W = (W * (W > 0))
         eigenvalues, eigenvectors = torch.eig(W, eigenvectors=True)
-        eigenvalues = eigenvalues.cpu()
-        eigenvectors = eigenvectors.cpu()
+        eigenvalues = eigenvalues[-K:] 
+        eigenvectors = eigenvectors[:, -K:].T
     
     # Eigenvectors of affinity matrix with scipy
     elif which_matrix == 'affinity_svd':        
-        USV = torch.linalg.svd(feats, full_matrices=False)
-        eigenvectors = USV[0][:, :K].T #.to('cpu', non_blocking=True)
-        eigenvalues = USV[1][:K] #.to('cpu', non_blocking=True)
+        USV = torch.linalg.svd(W, full_matrices=False)
+        eigenvectors = USV[0][:, -K:].T #.to('cpu', non_blocking=True)
+        eigenvalues = USV[1][-K:] #.to('cpu', non_blocking=True)
 
     # Eigenvectors of affinity matrix with scipy
     elif which_matrix == 'affinity':
-        W = (feats @ feats.T)
-        if threshold_at_zero:
-            W = (W * (W > 0))
         W = W.cpu().numpy()
         eigenvalues, eigenvectors = eigsh(W, which='LM', k=K)
-        eigenvectors = torch.flip(torch.from_numpy(eigenvectors), dims=(-1,)).T
 
     # Eigenvectors of matting laplacian matrix
     elif which_matrix in ['matting_laplacian', 'laplacian']:
 
         ### Feature affinities 
-        W_feat = (feats @ feats.T)
-        if threshold_at_zero:
-            W_feat = (W_feat * (W_feat > 0))
-        W_feat = W_feat.cpu().numpy()
+        W_feat = W.cpu().numpy()
         
         # Combine
         if image_color_lambda > 0:

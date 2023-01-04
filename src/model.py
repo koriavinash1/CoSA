@@ -29,7 +29,8 @@ class SlotAttention(nn.Module):
                         cosine=False,
                         unique_sampling=False,
                         cb_decay=0.99,
-                        cb_variational=False
+                        cb_variational=False,
+                        cov_binarize=False
                         ):
         super().__init__()
         self.num_slots = num_slots
@@ -42,6 +43,7 @@ class SlotAttention(nn.Module):
         
         self.nunique_slots = nunique_slots
         self.quantize = quantize
+        self.cov_binarize = cov_binarize
 
         assert self.num_slots < np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
 
@@ -140,6 +142,17 @@ class SlotAttention(nn.Module):
 
         x = F.normalize(x, p=2, dim=-1)
         coveriance_matrix = torch.einsum('bkf, bgf -> bkg', x, x)
+
+        if self.cov_binarize:
+            # apply softmax on token dimension 
+            # feats = torch.softmax(feats, dim = 1)
+            # feats = feats / feats.sum(dim=-1, keepdim=True)
+            
+            coveriance_matrix = torch.sigmoid(coveriance_matrix)
+            coveriance_matrix[coveriance_matrix >= 0.5] = 1
+            coveriance_matrix[coveriance_matrix < 0.5] = 0
+
+
         # eigen vectors are arranged in ascending order of their eigen values, so picking last n objects
         eigen_values, eigen_vectors = torch.symeig(coveriance_matrix, eigenvectors=True)
         # eigen_vectors = (eigen_vectors - torch.min(eigen_vectors, dim=-1, keepdim=True)[0])/ (torch.max(eigen_vectors, dim=-1, keepdim=True)[0] - torch.min(eigen_vectors, dim=-1, keepdim=True)[0])
@@ -172,7 +185,7 @@ class SlotAttention(nn.Module):
                                         K = shape[1],# self.nunique_slots+1, 
                                         which_matrix = 'matting_laplacian',
                                         normalize  = True,
-                                        binarize = True,
+                                        binarize = self.cov_binarize,
                                         lapnorm = True,
                                         threshold_at_zero = True,
                                         image_color_lambda = 0 if batch is None else 10)
@@ -405,7 +418,8 @@ class SlotAttentionAutoEncoder(nn.Module):
                         cb_decay=0.99,
                         encoder_res=4,
                         decoder_res=4,
-                        variational=False):
+                        variational=False, 
+                        binarize=False):
         """Builds the Slot Attention-based auto-encoder.
         Args:
         resolution: Tuple of integers specifying width and height of input image.
@@ -436,7 +450,8 @@ class SlotAttentionAutoEncoder(nn.Module):
             cb_decay=cb_decay,
             encoder_intial_res=(encoder_res, encoder_res),
             decoder_intial_res=(decoder_res, decoder_res),
-            cb_variational=variational)
+            cb_variational=variational,
+            cov_binarize=binarize)
 
 
     def forward(self, image, num_slots=None, epoch=0, batch=0):

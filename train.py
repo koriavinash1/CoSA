@@ -53,6 +53,8 @@ parser.add_argument('--tau_steps', type=int, default=30000)
 
 parser.add_argument('--nunique_objects', type=int, default=8)
 parser.add_argument('--variational', type=str2bool, default=False)
+parser.add_argument('--binarize', type=str2bool, default=False)
+
 parser.add_argument('--overlap_weightage', type=float, default=0.0)
 parser.add_argument('--cb_decay', type=float, default=0.0)
 
@@ -86,7 +88,8 @@ model = SlotAttentionAutoEncoder(resolution,
                                     opt.cb_decay,
                                     opt.encoder_res,
                                     opt.decoder_res,
-                                    opt.variational).to(device)
+                                    opt.variational,
+                                    opt.binarize).to(device)
 # model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
 
 criterion = nn.MSELoss()
@@ -243,7 +246,7 @@ for epoch in range(opt.num_epochs):
         recon_loss = ((image - recon_combined)**2).mean()
         
         overlap_loss = dice_loss(masks)
-        loss = recon_loss + 0.5*qloss #+ opt.overlap_weightage*overlap_loss
+        loss = recon_loss + 0.5*qloss + opt.overlap_weightage*overlap_loss
 
         total_loss += loss.item()
 

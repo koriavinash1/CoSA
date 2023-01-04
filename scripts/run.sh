@@ -7,7 +7,8 @@ OPWEIGHTAGE=$6
 QUANTIZE=$7
 COSINE=$8
 VAR=$9
-NAME=${10}
+BINARIZE=${10}
+NAME=${11}
 
 
 LOGS='/vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/LOGSJAN0423'
@@ -25,4 +26,5 @@ python /vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/train.p
                                             --overlap_weightage $OPWEIGHTAGE \
                                             --quantize $QUANTIZE \
                                             --cosine $COSINE \
+                                            --binarize $BINARIZE \
                                             --variational $VAR
