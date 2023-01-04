@@ -221,32 +221,34 @@ class SlotAttention(nn.Module):
 
 
         inputs_features_noposition = self.encoder_transformation(inputs, position = False)
+        k_noposition =  self.to_k(inputs_features_noposition)
 
-        k = self.to_k(inputs_features_noposition)
+
+        k = self.to_k(inputs_features)
         v = self.to_v(inputs_features)
 
 
         if self.quantize:
             # eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
-            eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
-            objects = self.masked_projection(k, eigen_basis)   
+            eigen_basis, eigen_values = self.extract_eigen_basis(k_noposition, batch=images)
+            objects = self.masked_projection(k_noposition, eigen_basis)   
 
             # context loss
-            qloss += F.mse_loss(objects.mean(1), k.mean(1))
+            qloss += F.mse_loss(objects.mean(1), k_noposition.mean(1))
 
             
             qloss1, _, _, _ = self.slot_quantizer(objects, 
                                                     avg = False, 
                                                     unique=True,
                                                     nunique=self.nunique_slots +1,
-                                                    loss_type = 0)
-                                                    # reset_usage = (batch == 0))
+                                                    loss_type = 0,
+                                                    reset_usage = (batch == 0))
             qloss += qloss1 
 
             # if (epoch % 5 == 4) and (batch==0) and (epoch < 25): self.slot_quantizer.entire_cb_restart()
 
             # sample objects
-            objects, cbidxs, _ = self.slot_quantizer.sample(k)
+            objects, cbidxs, _ = self.slot_quantizer.sample(k_noposition)
                                                             # , 
                                                             # unique=True,
                                                             # nunique=self.nunique_slots +1)

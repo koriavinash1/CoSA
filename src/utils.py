@@ -115,7 +115,8 @@ def compute_eigen(
 
     if binarize:
         # apply softmax on token dimension 
-        # feats = troch.softmax(feats, dim = 1)
+        # feats = torch.softmax(feats, dim = 1)
+        # feats = feats / feats.sum(dim=-1, keepdim=True)
         
         feats = torch.sigmoid(feats)
         feats[feats >= 0.5] = 1
