@@ -28,7 +28,7 @@ parser.add_argument('--batch_size', default=32, type=int)
 
 parser.add_argument('--num_slots', default=10, type=int, help='Number of slots in Slot Attention.')
 parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
-parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
+parser.add_argument('--num_iterations', default=3, type=int, help='Number of attention iterations.')
 parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
 parser.add_argument('--learning_rate', default=0.0004, type=float)
 
@@ -54,6 +54,7 @@ parser.add_argument('--tau_steps', type=int, default=30000)
 parser.add_argument('--nunique_objects', type=int, default=8)
 parser.add_argument('--variational', type=str2bool, default=False)
 parser.add_argument('--binarize', type=str2bool, default=False)
+parser.add_argument('--eigen_noposition', type=str2bool, default=True)
 
 parser.add_argument('--overlap_weightage', type=float, default=0.0)
 parser.add_argument('--cb_decay', type=float, default=0.0)
@@ -89,7 +90,8 @@ model = SlotAttentionAutoEncoder(resolution,
                                     opt.encoder_res,
                                     opt.decoder_res,
                                     opt.variational,
-                                    opt.binarize).to(device)
+                                    opt.binarize,
+                                    opt.eigen_noposition).to(device)
 # model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
 
 criterion = nn.MSELoss()

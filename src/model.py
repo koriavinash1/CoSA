@@ -30,7 +30,8 @@ class SlotAttention(nn.Module):
                         unique_sampling=False,
                         cb_decay=0.99,
                         cb_variational=False,
-                        cov_binarize=False
+                        cov_binarize=False,
+                        no_position=True,
                         ):
         super().__init__()
         self.num_slots = num_slots
@@ -44,6 +45,7 @@ class SlotAttention(nn.Module):
         self.nunique_slots = nunique_slots
         self.quantize = quantize
         self.cov_binarize = cov_binarize
+        self.no_position = no_position
 
         assert self.num_slots < np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
 
@@ -233,15 +235,26 @@ class SlotAttention(nn.Module):
         inputs_features = self.norm_input(inputs_features)
 
 
-        inputs_features_noposition = self.encoder_transformation(inputs, position = False)
-        k_noposition =  self.to_k(inputs_features_noposition)
-
-
         k = self.to_k(inputs_features)
         v = self.to_v(inputs_features)
 
 
+
+
+
+
         if self.quantize:
+
+            with torch.no_grad():
+                if self.no_position:
+                    inputs_features_noposition = self.encoder_transformation(inputs, position = False)
+                    k_noposition =  self.to_k(inputs_features_noposition)
+                else:
+                    inputs_features_noposition = inputs_features
+                    k_noposition = k
+            k_noposition = k + (k_noposition - k).detach() 
+
+
             # eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
             eigen_basis, eigen_values = self.extract_eigen_basis(k_noposition, batch=images)
             objects = self.masked_projection(k_noposition, eigen_basis)   
@@ -296,7 +309,7 @@ class SlotAttention(nn.Module):
 
             slots = slots.reshape(b, -1, d)
             slots = slots + self.mlp(self.norm_pre_ff(slots))
-            slots = self.positional_encoder(slots)
+            # slots = self.positional_encoder(slots)
 
         # quantize slots
         # if self.quantize:
@@ -361,20 +374,45 @@ class Encoder(nn.Module):
     def __init__(self, resolution, hid_dim):
         super().__init__()
         self.conv1 = nn.Conv2d(3, hid_dim, 5, stride=2, padding = 2)
+        # self.conv11 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
+
         self.conv2 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
+        # self.conv21 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
+
         self.conv3 = nn.Conv2d(hid_dim, hid_dim, 5, stride=2, padding = 2)
+        # self.conv31 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
+
         self.conv4 = nn.Conv2d(hid_dim, hid_dim, 5, stride=2, padding = 2)
+        # self.conv41 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
 
     def forward(self, x):
         x = self.conv1(x)
         x = F.relu(x)
+
+        # x = self.conv11(x)
+        # x = F.relu(x)
+
         x = self.conv2(x)
         x = F.relu(x)
+
+        # x = self.conv21(x)
+        # x = F.relu(x)
+
+
         x = self.conv3(x)
         x = F.relu(x)
+
+        # x = self.conv31(x)
+        # x = F.relu(x)
+
+
         x = self.conv4(x)
         x = F.relu(x)
+
+        # x = self.conv41(x)
+        # x = F.relu(x)
         return x
+
 
 class Decoder(nn.Module):
     def __init__(self, hid_dim, resolution):
@@ -400,6 +438,7 @@ class Decoder(nn.Module):
         x = self.conv5(x)
         x = F.relu(x)
         x = self.conv6(x)
+        x = F.relu6(x)
         x = x[:,:,:self.resolution[0], :self.resolution[1]]
         return x
 
@@ -419,7 +458,8 @@ class SlotAttentionAutoEncoder(nn.Module):
                         encoder_res=4,
                         decoder_res=4,
                         variational=False, 
-                        binarize=False):
+                        binarize=False,
+                        no_position=True):
         """Builds the Slot Attention-based auto-encoder.
         Args:
         resolution: Tuple of integers specifying width and height of input image.
@@ -451,7 +491,8 @@ class SlotAttentionAutoEncoder(nn.Module):
             encoder_intial_res=(encoder_res, encoder_res),
             decoder_intial_res=(decoder_res, decoder_res),
             cb_variational=variational,
-            cov_binarize=binarize)
+            cov_binarize=binarize,
+            no_position=no_position)
 
 
     def forward(self, image, num_slots=None, epoch=0, batch=0):
@@ -462,7 +503,11 @@ class SlotAttentionAutoEncoder(nn.Module):
         # `x` has shape: [batch_size, input_size, width, height].
 
         # Slot Attention module.
-        slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, num_slots, epoch, batch, images=image)
+        slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, 
+                                                                        num_slots, 
+                                                                        epoch, 
+                                                                        batch, 
+                                                                        images=image)
         # `slots` has shape: [batch_size, num_slots, slot_size].
         # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
 

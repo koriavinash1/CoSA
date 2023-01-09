@@ -122,7 +122,6 @@ def compute_eigen(
     if binarize:
         # apply softmax on token dimension 
         W = torch.softmax(W, dim = 1)
-        W = W / W.sum(dim=-1, keepdim=True)
         
         # W = torch.sigmoid(W)
         # W[W >= 0.5] = 1

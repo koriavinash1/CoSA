@@ -294,12 +294,12 @@ class VectorQuantizerEMA(nn.Module):
         if self.variational:
             self.mean = nn.Sequential(nn.Linear(embedding_dim, embedding_dim),
                                                     nn.ReLU(inplace=True),
-                                                    nn.Linear(embedding_dim, 1))
+                                                    nn.Linear(embedding_dim, embedding_dim))
             self.logvar = nn.Sequential(nn.Linear(embedding_dim, embedding_dim),
                                                     nn.ReLU(inplace=True),
-                                                    nn.Linear(embedding_dim, 1))
+                                                    nn.Linear(embedding_dim, embedding_dim))
 
-            self.sampler = lambda mu, std: torch.randn_like(std) * std + mu
+            self.variational_sampler = lambda mu, std: torch.randn_like(std) * std + mu
 
         # ======================
         self.register_buffer('_usage', torch.ones(self._num_embeddings), persistent=False)
@@ -430,6 +430,10 @@ class VectorQuantizerEMA(nn.Module):
             # logvar = self.logvar(quantized).squeeze(-1)
             # klloss += 0.5*torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
             # print (klloss)
+
+            # sample quantized
+            sigma = torch.exp(0.5*logvar)
+            quantized = self.variational_sampler(quantized, sigma)
 
         # Loss
         if not avg:

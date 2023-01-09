@@ -8,10 +8,11 @@ QUANTIZE=$7
 COSINE=$8
 VAR=$9
 BINARIZE=${10}
-NAME=${11}
+NOPOSITION=${11}
+NAME=${12}
+ITER=${13}
 
-
-LOGS='/vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/LOGSJAN0423'
+LOGS='/vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/LOGS100123'
 python /vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/train.py \
                                             --exp_name $NAME \
                                             --batch_size 16 \
@@ -27,4 +28,6 @@ python /vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots/train.p
                                             --quantize $QUANTIZE \
                                             --cosine $COSINE \
                                             --binarize $BINARIZE \
-                                            --variational $VAR
+                                            --eigen_noposition $NOPOSITION \
+                                            --variational $VAR \
+                                            --num_iterations $ITER
