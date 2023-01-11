@@ -5,6 +5,7 @@ from src.model import *
 from tqdm import tqdm
 import time, math
 from datetime import datetime, timedelta
+from torch.nn.utils import clip_grad_norm_
 
 import torch.optim as optim
 import torch
@@ -46,10 +47,6 @@ parser.add_argument('--quantize', default=False, type=str2bool, help='perform sl
 parser.add_argument('--cosine', default=False, type=str2bool, help='use geodesic distance')
 parser.add_argument('--unique_sampling', default=False, type=str2bool, help='use unique sampling')
 
-
-parser.add_argument('--tau_start', type=float, default=1.0)
-parser.add_argument('--tau_final', type=float, default=0.1)
-parser.add_argument('--tau_steps', type=int, default=30000)
 
 parser.add_argument('--nunique_objects', type=int, default=8)
 parser.add_argument('--variational', type=str2bool, default=False)
@@ -142,23 +139,6 @@ def linear_warmup(step, start_value, final_value, start_step, final_step):
     return value
 
 
-def cosine_anneal(step, start_value, final_value, start_step, final_step):
-    
-    assert start_value >= final_value
-    assert start_step <= final_step
-    
-    if step < start_step:
-        value = start_value
-    elif step >= final_step:
-        value = final_value
-    else:
-        a = 0.5 * (start_value - final_value)
-        b = 0.5 * (start_value + final_value)
-        progress = (step - start_step) / (final_step - start_step)
-        value = a * math.cos(math.pi * progress) + b
-    
-    return value
-
 
 class SoftDiceLossV1(nn.Module):
     '''
@@ -191,6 +171,8 @@ _dice_loss_ = SoftDiceLossV1()
 def dice_loss(masks):
     shape = masks.shape
     idxs = np.arange(shape[1])
+
+    masks = (masks - masks.min(dim=1, keepdim=True)[0] + 1e-4)/(1e-4 + masks.max(dim=1, keepdim=True)[0] - masks.min(dim=1, keepdim=True)[0])
     gt_masks = masks.clone().detach()
     gt_masks[gt_masks >= 0.5] = 1.0
     gt_masks[gt_masks < 0.5] = 0.0
@@ -207,6 +189,8 @@ def dice_loss(masks):
 start = time.time()
 i = 0
 lr_decay_factor = 1
+recon_history = [0]*5
+
 for epoch in range(opt.num_epochs):
     model.train()
 
@@ -216,14 +200,6 @@ for epoch in range(opt.num_epochs):
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         i += 1
         global_step = epoch * train_epoch_size + i
-
-
-        tau = cosine_anneal(
-            global_step,
-            opt.tau_start,
-            opt.tau_final,
-            0,
-            opt.tau_steps)
 
         lr_warmup_factor = linear_warmup(
             global_step,
@@ -238,7 +214,7 @@ for epoch in range(opt.num_epochs):
             learning_rate = opt.learning_rate
 
         learning_rate = learning_rate * (opt.decay_rate ** (
-            i / opt.decay_steps))
+                                            i / opt.decay_steps))
 
         learning_rate = lr_decay_factor * lr_warmup_factor * opt.learning_rate
         optimizer.param_groups[0]['lr'] = learning_rate
@@ -255,6 +231,7 @@ for epoch in range(opt.num_epochs):
 
         optimizer.zero_grad()
         loss.backward()
+        clip_grad_norm_(model.parameters(), 1.0, 'inf')
         optimizer.step()
 
         idxs.append(cbidxs)
@@ -278,12 +255,21 @@ for epoch in range(opt.num_epochs):
         del recons, masks, slots
 
     total_loss /= len(train_dataloader)
+    
+    recon_history.append(total_loss)
+    recon_history = recon_history[1:]
+
+
     idxs = torch.cat(idxs, 0)
     print ("EXP: {}, Epoch: {}, RECON:{}, Loss: {}, CB_VAR: {}, Time: {}".format(opt.exp_name,
                                                         epoch, recon_loss.item(), total_loss, 
                                                         torch.unique(idxs),
                                                         timedelta(seconds=time.time() - start)))
 
+
+    if epoch > 5:
+        opt.overlap_weightage = min(1.0, 10*epoch/opt.num_epochs)
+    
     if not epoch % 10:
         torch.save({
             'model_state_dict': model.state_dict(),
@@ -291,6 +277,6 @@ for epoch in range(opt.num_epochs):
             }, os.path.join(opt.model_dir, f'ckpt_{epoch}.pth'))
 
 
-    if epoch % 50 == 49:
+    if (epoch > 10) and (np.mean(recon_history) < total_loss):
         lr_decay_factor *= 0.5
         

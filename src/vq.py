@@ -394,9 +394,30 @@ class VectorQuantizerEMA(nn.Module):
             if np.random.uniform() > 0.99: self.random_restart()
             if reset_usage: self.reset_usage()
         
+
+        if self._cosine:
+            scale = torch.norm(inputs, dim = -1, keepdim=True)
+            inputs = inputs / scale
+
+
         # Flatten input
         flat_input = inputs.view(-1, self._embedding_dim)
         
+
+
+        klloss = 0
+        # Variational...
+        if self.variational:
+            # conti. divergence 
+            mean = self.mean(inputs).squeeze(-1)
+            logvar = self.logvar(inputs).squeeze(-1)
+            klloss += torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
+
+            # sample quantized
+            sigma = torch.exp(0.5*logvar)
+            inputs = self.variational_sampler(inputs, sigma)
+
+
         quantized, encoding_indices, encodings = self.sample(inputs, unique, nunique)
 
         # Reset unused cb vectors...
@@ -417,23 +438,6 @@ class VectorQuantizerEMA(nn.Module):
             self._embedding.weight = nn.Parameter(self._ema_w / self._ema_cluster_size.unsqueeze(1))
         
 
-        klloss = 0
-        # Variational...
-        if self.variational:
-            # conti. divergence 
-            mean = self.mean(inputs).squeeze(-1)
-            logvar = self.logvar(inputs).squeeze(-1)
-            klloss += 0.5*torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
-
-            # dis. divergence 
-            # mean = self.mean(quantized).squeeze(-1)
-            # logvar = self.logvar(quantized).squeeze(-1)
-            # klloss += 0.5*torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
-            # print (klloss)
-
-            # sample quantized
-            sigma = torch.exp(0.5*logvar)
-            quantized = self.variational_sampler(quantized, sigma)
 
         # Loss
         if not avg:
@@ -462,4 +466,10 @@ class VectorQuantizerEMA(nn.Module):
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         
         encoding_indices = encoding_indices.view(input_shape[0], -1)
+
+
+
+        if self._cosine:
+            quantized = quantized*scale
+            
         return loss, quantized, perplexity, encoding_indices

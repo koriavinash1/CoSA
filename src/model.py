@@ -54,15 +54,17 @@ class SlotAttention(nn.Module):
         self.encoder_position = SoftPositionEmbed(dim, encoder_intial_res)
         self.encoder_norm = nn.LayerNorm([ntokens, dim])
 
-        self.positional_encoder = PositionalEncoding(ntokens, dim)
         self.encoder_feature_mlp = nn.Sequential(nn.Linear(dim, dim),
                                                 nn.ReLU(inplace=True),
                                                 nn.Linear(dim, dim),
                                                 nn.ReLU(inplace=True))
-        self.slot_transformation = nn.Sequential(nn.Linear(dim, dim),
-                                                nn.ReLU(inplace=True),
-                                                nn.Linear(dim, dim),
-                                                nn.ReLU(inplace=True))
+
+
+        # self.positional_encoder = PositionalEncoding(ntokens, dim)
+        # self.slot_transformation = nn.Sequential(nn.Linear(dim, dim),
+        #                                         nn.ReLU(inplace=True),
+        #                                         nn.Linear(dim, dim),
+        #                                         nn.ReLU(inplace=True))
 
 
 
@@ -109,9 +111,13 @@ class SlotAttention(nn.Module):
                                                     variational=cb_variational)
                 print ('VQVAE model', cb_decay)
         else:         
-            self.slots_mu    = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
-            self.slots_sigma = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
-    
+            # self.slots_mu    = nn.Parameter(torch.randn(1, 1, dim)) # nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
+            # self.slots_sigma = nn.Parameter(torch.randn(1, 1, dim)*0.01) # nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
+            
+            self.slots_mu = nn.Parameter(torch.zeros(1, 1, dim))
+            self.slots_sigma = nn.Parameter(torch.zeros(1, 1, dim))
+            nn.init.xavier_uniform_(self.slots_mu)
+            nn.init.xavier_uniform_(self.slots_sigma)
 
 
 
@@ -241,18 +247,16 @@ class SlotAttention(nn.Module):
 
 
 
-
-
         if self.quantize:
 
-            with torch.no_grad():
-                if self.no_position:
-                    inputs_features_noposition = self.encoder_transformation(inputs, position = False)
-                    k_noposition =  self.to_k(inputs_features_noposition)
-                else:
-                    inputs_features_noposition = inputs_features
-                    k_noposition = k
-            k_noposition = k + (k_noposition - k).detach() 
+            # with torch.no_grad():
+            if self.no_position:
+                inputs_features_noposition = self.encoder_transformation(inputs, position = False)
+                k_noposition =  self.to_k(inputs_features_noposition)
+            else:
+                inputs_features_noposition = inputs_features
+                k_noposition = k
+            # k_noposition = k + (k_noposition - k).detach() 
 
 
             # eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
@@ -260,7 +264,7 @@ class SlotAttention(nn.Module):
             objects = self.masked_projection(k_noposition, eigen_basis)   
 
             # context loss
-            qloss += F.mse_loss(objects.mean(1), k_noposition.mean(1))
+            qloss += 0.01*F.mse_loss(objects.mean(1), k_noposition.mean(1))
 
             
             qloss1, _, _, _ = self.slot_quantizer(objects, 
@@ -268,6 +272,7 @@ class SlotAttention(nn.Module):
                                                     unique=True,
                                                     nunique=self.nunique_slots +1,
                                                     loss_type = 0,
+                                                    update = False,
                                                     reset_usage = (batch == 0))
             qloss += qloss1 
 
@@ -438,7 +443,7 @@ class Decoder(nn.Module):
         x = self.conv5(x)
         x = F.relu(x)
         x = self.conv6(x)
-        x = F.relu6(x)
+        # x = F.relu6(x)
         x = x[:,:,:self.resolution[0], :self.resolution[1]]
         return x
 
