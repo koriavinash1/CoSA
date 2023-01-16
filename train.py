@@ -29,7 +29,7 @@ parser.add_argument('--batch_size', default=32, type=int)
 
 parser.add_argument('--num_slots', default=10, type=int, help='Number of slots in Slot Attention.')
 parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
-parser.add_argument('--num_iterations', default=3, type=int, help='Number of attention iterations.')
+parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
 parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
 parser.add_argument('--learning_rate', default=0.0004, type=float)
 
@@ -55,6 +55,10 @@ parser.add_argument('--eigen_noposition', type=str2bool, default=True)
 
 parser.add_argument('--overlap_weightage', type=float, default=0.0)
 parser.add_argument('--cb_decay', type=float, default=0.0)
+
+parser.add_argument('--cb_qk', type=str2bool, default=False)
+parser.add_argument('--eigen_quantizer', type=str2bool, default=False)
+parser.add_argument('--restart_cbstats', type=str2bool, default=False)
 
 
 
@@ -88,7 +92,10 @@ model = SlotAttentionAutoEncoder(resolution,
                                     opt.decoder_res,
                                     opt.variational,
                                     opt.binarize,
-                                    opt.eigen_noposition).to(device)
+                                    opt.eigen_noposition,
+                                    opt.cb_qk,
+                                    opt.eigen_quantizer,
+                                    opt.restart_cbstats).to(device)
 # model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
 
 criterion = nn.MSELoss()
@@ -231,7 +238,7 @@ for epoch in range(opt.num_epochs):
 
         optimizer.zero_grad()
         loss.backward()
-        clip_grad_norm_(model.parameters(), 1.0, 'inf')
+        # clip_grad_norm_(model.parameters(), 10.0, 2)
         optimizer.step()
 
         idxs.append(cbidxs)
@@ -268,7 +275,7 @@ for epoch in range(opt.num_epochs):
 
 
     if epoch > 5:
-        opt.overlap_weightage = min(1.0, 10*epoch/opt.num_epochs)
+        opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)
     
     if not epoch % 10:
         torch.save({
@@ -277,6 +284,9 @@ for epoch in range(opt.num_epochs):
             }, os.path.join(opt.model_dir, f'ckpt_{epoch}.pth'))
 
 
-    if (epoch > 10) and (np.mean(recon_history) < total_loss):
+    # if (epoch > 10) and (np.mean(recon_history) < total_loss):
+    #     lr_decay_factor *= 0.5
+
+
+    if epoch % 50 == 49:
         lr_decay_factor *= 0.5
-        
