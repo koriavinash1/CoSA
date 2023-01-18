@@ -425,17 +425,7 @@ class VectorQuantizerEMA(nn.Module):
 
         # Quantize and unflatten
         quantized = torch.matmul(encodings, self._embedding.weight).view(input_shape)
-        
-        slots = None
-        # slot sampling
-        if self.qk:
-            slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
-            slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
-
-            slot_sigma = torch.exp(0.5*slot_sigma)
-            slots = torch.normal(slot_mu, slot_sigma).view(input_shape)
-
-        return quantized, encoding_indices, encodings, slots
+        return quantized, encoding_indices, encodings
 
 
     def forward(self, inputs, avg=False, 
@@ -512,16 +502,9 @@ class VectorQuantizerEMA(nn.Module):
             loss = self._commitment_cost * e_latent_loss
 
 
-
-        # qk loss
-        qkloss = 0
-        if self.qk:
-            slot_mu = self.mu_embeddings.weight
-            slot_logvar = self.sigma_embeddings.weight
-            qkloss += torch.mean(-0.5 * (1 + slot_logvar - slot_mu ** 2 - slot_logvar.exp()))
-
+        # print (loss, klloss, hloss)
         loss += klloss
-        loss += qkloss
+        # loss += hloss
 
         # Straight Through Estimator
         quantized = inputs + (quantized - inputs).detach()

@@ -42,6 +42,7 @@
 # ./slurm-wrapper.sh 8 8 64 0.75 16 0.1 True True False False True True True True euclidian_qk_cbr_eigen_quantize3op 3
 # ./slurm-wrapper.sh 8 8 64 0.75 16 0.1 True True False True True True True True euclidian_qk_cbr_eigen_quantize3varop 3
 
+<<<<<<< HEAD
 
 
 ./slurm-wrapper.sh 8 8 64 0.75 16 0.0 True True True False False False False False cosine_feature_quantize10 10
@@ -55,15 +56,5 @@
 ./slurm-wrapper.sh 8 8 64 0.75 16 0.0 True True True False True False True True cosine_qk_eigen_quantize3 3
 ./slurm-wrapper.sh 8 8 64 0.75 16 0.0 True True True False True True True True cosine_qk_cbr_eigen_quantize10 10
 
-
 # ./slurm-wrapper.sh 8 8 64 0.75 16 0.1 True True True False True True True True cosine_qk_cbr_eigen_quantize3op 3
 # ./slurm-wrapper.sh 8 8 64 0.75 16 0.1 True True True True True True True True cosine_qk_cbr_eigen_quantize3varop 3
-
-
-
-
-
-
-
-
-
