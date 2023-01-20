@@ -15,20 +15,15 @@ BINARIZE=${14}
 NAME=${15}
 ITER=${16}
 
-<<<<<<< HEAD
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSQKDlr'
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSQKDlrMVar'
 python /vol/biomedic3/agk21/testEigenSlots2/train.py \
-=======
-LOGS='/vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots2/LOGS150123'
-python /vol/biomedic2/agk21/PhDLogs/codes/ObjectDiscovery/testEigenSlots2/train.py \
->>>>>>> 3f97515a306b0dd8c02775aeecc68ba07eae2128
                                             --exp_name $NAME \
                                             --batch_size 16 \
                                             --model_dir $LOGS \
                                             --img_size $IMSIZE \
                                             --encoder_res $ENCODERRES \
                                             --decoder_res $DECODERRES \
-                                            --learning_rate 0.0004 \
+                                            --learning_rate 0.001 \
                                             --cb_decay $CBDECAY \
                                             --nunique_objects $NCONCEPTS \
                                             --max_slots $((2*$NCONCEPTS + 2)) \

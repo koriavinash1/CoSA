@@ -239,11 +239,7 @@ for epoch in range(opt.num_epochs):
 
         optimizer.zero_grad()
         loss.backward()
-<<<<<<< HEAD
-        # clip_grad_norm_(model.parameters(), 1.0, 'inf')
-=======
-        # clip_grad_norm_(model.parameters(), 10.0, 2)
->>>>>>> 3f97515a306b0dd8c02775aeecc68ba07eae2128
+        clip_grad_norm_(model.parameters(), 1.0, 'inf')
         optimizer.step()
 
         idxs.append(cbidxs)
@@ -290,18 +286,9 @@ for epoch in range(opt.num_epochs):
             }, os.path.join(opt.model_dir, f'ckpt_{epoch}.pth'))
 
 
-<<<<<<< HEAD
     if (epoch > 10) and (np.mean(recon_history) < total_loss):
         lr_decay_factor *= 0.5
 
 
     # if epoch % 50 == 49:
     #     lr_decay_factor *= 0.5
-=======
-    # if (epoch > 10) and (np.mean(recon_history) < total_loss):
-    #     lr_decay_factor *= 0.5
-
-
-    if epoch % 50 == 49:
-        lr_decay_factor *= 0.5
->>>>>>> 3f97515a306b0dd8c02775aeecc68ba07eae2128

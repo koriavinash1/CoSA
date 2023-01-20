@@ -69,8 +69,9 @@ def get_cosine_distance(u, v):
 
 
 def get_cb_variance(cb):
-    cd = get_euclidian_distance(cb, cb)
-    return torch.mean(torch.var(cd, 1)) 
+    cb = cb / torch.norm(cb, dim=1, keepdim=True)
+    cd = get_cosine_distance(cb, cb)
+    return 2 - torch.mean(torch.var(cd, 1)) 
 
 
 
@@ -425,7 +426,17 @@ class VectorQuantizerEMA(nn.Module):
 
         # Quantize and unflatten
         quantized = torch.matmul(encodings, self._embedding.weight).view(input_shape)
-        return quantized, encoding_indices, encodings
+        
+        slots = None
+        # slot sampling
+        if self.qk:
+            # import pdb;pdb.set_trace()
+            slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
+            slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
+            slot_sigma = torch.exp(0.5*slot_sigma)
+            slots = torch.normal(slot_mu, slot_sigma).view(input_shape)
+
+        return quantized, encoding_indices, encodings, slots
 
 
     def forward(self, inputs, avg=False, 
@@ -442,8 +453,9 @@ class VectorQuantizerEMA(nn.Module):
             if reset_usage: self.reset_usage()
         
 
-        scale = torch.norm(inputs, dim = -1, keepdim=True)
-        inputs = inputs / scale
+        if self._cosine:
+            scale = torch.norm(inputs, dim = -1, keepdim=True)
+            inputs = inputs / scale
 
 
         # Flatten input
@@ -502,9 +514,19 @@ class VectorQuantizerEMA(nn.Module):
             loss = self._commitment_cost * e_latent_loss
 
 
-        # print (loss, klloss, hloss)
+        # qk loss
+        qkloss = 0
+        if self.qk:
+            qkloss += get_cb_variance(self.mu_embeddings.weight)
+            qkloss += 0.01*torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
+        #     slot_mu = self.mu_embeddings.weight
+        #     slot_logvar = self.sigma_embeddings.weight
+
+
+        loss += get_cb_variance(self._embedding.weight)
         loss += klloss
-        # loss += hloss
+        loss += qkloss
+
 
         # Straight Through Estimator
         quantized = inputs + (quantized - inputs).detach()
@@ -513,7 +535,7 @@ class VectorQuantizerEMA(nn.Module):
         
         encoding_indices = encoding_indices.view(input_shape[0], -1)
 
-
-        quantized = quantized*scale
+        if self._cosine:
+            quantized = quantized*scale
             
         return loss, quantized, perplexity, encoding_indices, slots
