@@ -523,7 +523,7 @@ class VectorQuantizerEMA(nn.Module):
         #     slot_logvar = self.sigma_embeddings.weight
 
 
-        loss += get_cb_variance(self._embedding.weight)
+        # loss += get_cb_variance(self._embedding.weight)
         loss += klloss
         loss += qkloss
 

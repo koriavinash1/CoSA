@@ -9,6 +9,12 @@ from src.utils import compute_eigen
 from geomstats.geometry.hypersphere import Hypersphere
 
 
+import sys
+sys.path.append('/vol/biomedic3/agk21/deq')
+from lib.solvers import anderson, broyden
+from lib.jacobian import jac_loss_estimate
+import torch.autograd as autograd
+
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -42,6 +48,7 @@ class SlotAttention(nn.Module):
         self.dim = dim
         self.scale = dim ** -0.5
         self.temperature = temp
+        self.implicit = True
         self.cb_querykey = cb_querykey
         self.eigen_quantizer = eigen_quantizer
         self.restart_cbstats = restart_cbstats
@@ -128,6 +135,11 @@ class SlotAttention(nn.Module):
             self.slots_mu    = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
             self.slots_sigma = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
 
+
+
+
+        if self.implicit:
+            self.solver = broyden
 
 
     def encoder_transformation(self, features, position=True):
@@ -235,6 +247,35 @@ class SlotAttention(nn.Module):
 
 
 
+    def step(self, slots_prev, k , v):
+
+        slots = self.norm_slots(slots_prev)
+        q = self.to_q(slots)
+
+        dots = torch.einsum('bid,bjd->bij', q, k) * self.scale
+        attn = dots.softmax(dim=1) + self.eps
+        attn = attn / attn.sum(dim=-1, keepdim=True)
+
+        updates = torch.einsum('bjd,bij->bid', v, attn)
+        slots = self.gru(
+            updates.reshape(-1, self.dim),
+            slots_prev.reshape(-1, self.dim)
+        )
+
+        slots = slots.reshape(k.shape[0], -1, self.dim)
+        # slots = self.positional_encoder(slots)
+        slots = slots + self.mlp(self.norm_pre_ff(slots))
+
+        return slots 
+
+
+    def iterate(self, f, x, niter):
+        for _ in range(niter):
+            x = f(x)
+        return x
+
+    
+
     def forward(self, inputs, num_slots = None, epoch=0, batch= 0, train = True, images=None):
         b, d, w, h = inputs.shape
         n_s = num_slots if num_slots is not None else self.num_slots        
@@ -314,29 +355,37 @@ class SlotAttention(nn.Module):
         
 
 
-        for _ in range(self.iters):
-            slots_prev = slots
-
-            slots = self.norm_slots(slots)
-            q = self.to_q(slots)
-
-
-            dots = torch.einsum('bid,bjd->bij', q, k) * self.scale
-            attn = dots.softmax(dim=1) + self.eps
-            attn = attn / attn.sum(dim=-1, keepdim=True)
-
-            updates = torch.einsum('bjd,bij->bid', v, attn)
-
-            slots = self.gru(
-                updates.reshape(-1, d),
-                slots_prev.reshape(-1, d)
-            )
-
-            slots = slots.reshape(b, -1, d)
-            # slots = self.positional_encoder(slots)
-            slots = slots + self.mlp(self.norm_pre_ff(slots))
+        if not self.implicit:
+            slots = self.iterate(lambda z: self.step(z, k, v), slots, self.iters)
+        else:
+            slots = self.iterate(lambda z: self.step(z, k, v), slots, self.iters)
+            prev_slots = slots
+            slots = self.step(slots.detach(), k, v)
 
 
+            # if self.training:                
+            #     # Jacobian-related computations, see additional step above. For instance:
+            #     jac_loss = jac_loss_estimate(slots, prev_slots, vecs=1)
+            #     f_thres=30
+            #     b_thres=40
+
+            #     qloss += 0.001*jac_loss.mean()
+
+            #     def backward_hook(grad):
+            #         if self.hook is not None:
+            #             self.hook.remove()
+            #             torch.cuda.synchronize()   # To avoid infinite recursion
+
+            #         # Compute the fixed point of yJ + grad, where J=J_f is the Jacobian of f at z_star
+            #         new_grad = self.solver(lambda y: autograd.grad(slots, 
+            #                                                         prev_slots, 
+            #                                                         y, 
+            #                                                         retain_graph=True)[0] + grad, \
+            #                                         torch.zeros_like(grad), 
+            #                                         threshold=b_thres)['result']
+            #         return new_grad
+
+            #     self.hook = slots.register_hook(backward_hook)
 
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
 
