@@ -30,7 +30,7 @@ parser.add_argument('--batch_size', default=32, type=int)
 parser.add_argument('--num_slots', default=10, type=int, help='Number of slots in Slot Attention.')
 parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
 parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
-parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
+parser.add_argument('--hid_dim', default=128, type=int, help='hidden dimension size')
 parser.add_argument('--learning_rate', default=0.0004, type=float)
 
 parser.add_argument('--img_size', default=128, type=int)

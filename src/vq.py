@@ -19,7 +19,11 @@ def unique_sampling_fn(distances, nunique=-1):
     # distance: Bxntokensxncbtokens
 
     B, S, N = distances.shape
-    if (nunique == -1): nunique = min(S, N)
+    if not isinstance(nunique, list):
+        if (nunique == -1): 
+            nunique = min(S, N)
+        nunique = [nunique]*B
+
 
     batch_sampled_vectors = []
     for b in range(B):
@@ -29,9 +33,10 @@ def unique_sampling_fn(distances, nunique=-1):
         sampled_vectors = []
         sampled_distances = []
         for i in range(S):
-            if i < nunique:
+            if i < nunique[b]:
                 for k in range(N):
                     current_idx = sorted_idx[i, k]
+                    
                     if not (current_idx in sampled_vectors):
                         sampled_vectors.append(current_idx.unsqueeze(0))
                         sampled_distances.append(distance_vector[i, current_idx].unsqueeze(0))
@@ -65,13 +70,13 @@ def get_cosine_distance(u, v):
     ed2 = torch.sqrt(torch.sum(v**2, dim=1, keepdim=True))
     ed3 = torch.einsum('bd,dn->bn', ed1, rearrange(ed2, 'n d  -> d n'))
     geod = torch.clamp(d/(ed3), min=-0.99999, max=0.99999)
-    return torch.acos(geod)
+    return 2.0*torch.acos(torch.abs(geod))/np.pi
 
 
 def get_cb_variance(cb):
-    cb = cb / torch.norm(cb, dim=1, keepdim=True)
+    # cb = cb / torch.norm(cb, dim=1, keepdim=True)
     cd = get_cosine_distance(cb, cb)
-    return 2 - torch.mean(torch.var(cd, 1)) 
+    return 1 - torch.mean(torch.var(cd, 1)) 
 
 
 
@@ -112,6 +117,9 @@ class VectorQuantizer(nn.Module):
 
 
 
+        self.data_mean = 0
+        self.data_std = 0
+
         # ======================
         # Variational
         if self.variational:
@@ -140,10 +148,9 @@ class VectorQuantizer(nn.Module):
         #  randomly restart all dead codes below threshold with random code in codebook
         dead_codes = torch.nonzero(self._usage < self._usage_threshold).squeeze(1)
         useful_codes = torch.nonzero(self._usage > self._usage_threshold).squeeze(1)
-        mean = self._embedding.weight[useful_codes].mean(0).unsqueeze(0)
-        var = self._embedding.weight[useful_codes].var(0).unsqueeze(0)
-        eps = torch.randn((len(dead_codes), self._embedding_dim)).to(var.device)
-        rand_codes = eps*var + mean
+
+        eps = torch.randn((len(dead_codes), self._embedding_dim)).to(self._embedding.weight.device)
+        rand_codes = eps*self.data_std + self.data_mean
 
         with torch.no_grad():
             self._embedding.weight[dead_codes] = rand_codes
@@ -151,10 +158,8 @@ class VectorQuantizer(nn.Module):
 
 
     def entire_cb_restart(self):
-        mean = self._embedding.weight.mean(0).unsqueeze(0)
-        var = self._embedding.weight.var(0).unsqueeze(0)
-        eps = torch.randn((self._num_embeddings, self._embedding_dim)).to(var.device)
-        rand_codes = eps*var + mean
+        eps = torch.randn((self._num_embeddings, self._embedding_dim)).to(self._embedding.weight.device)
+        rand_codes = eps*self.data_std + self.data_mean
 
         with torch.no_grad():
             self._embedding.weight = rand_codes
@@ -233,6 +238,9 @@ class VectorQuantizer(nn.Module):
 
         # Flatten input
         flat_input = inputs.view(-1, self._embedding_dim)
+        self.data_mean = 0.9*self.data_mean + 0.1*flat_input.clone().detach().mean(0)
+        self.data_std = 0.9*self.data_std + 0.1*flat_input.clone().detach().std(0)
+
         
         quantized, encoding_indices, encodings, slots = self.sample(inputs, unique, nunique)
 
@@ -292,6 +300,8 @@ class VectorQuantizerEMA(nn.Module):
         self._cosine = cosine
         self.qk = qk
 
+        self.data_mean = 0
+        self.data_std = 0
 
         # ======================
 
@@ -305,7 +315,7 @@ class VectorQuantizerEMA(nn.Module):
             points_in_manifold = torch.Tensor(sphere.random_uniform(n_samples=self._num_embeddings))
             self._embedding.weight.data.copy_(points_in_manifold)
             self._get_distance = get_cosine_distance
-            self.loss_fn = lambda x1,x2: 1 - F.cosine_similarity(x1, x2).mean()
+            self.loss_fn = lambda x1,x2: 2.0*(1 - F.cosine_similarity(x1, x2).mean())
 
 
 
@@ -341,7 +351,7 @@ class VectorQuantizerEMA(nn.Module):
         self._decay = decay
         self._epsilon = epsilon
 
-
+        self.norm_input  = nn.LayerNorm(self._embedding_dim)
         self.get_variance = lambda: get_cb_variance(self._embedding.weight) 
 
 
@@ -358,42 +368,18 @@ class VectorQuantizerEMA(nn.Module):
         #  randomly restart all dead codes below threshold with random code in codebook
         dead_codes = torch.nonzero(self._usage < self._usage_threshold).squeeze(1)
         useful_codes = torch.nonzero(self._usage > self._usage_threshold).squeeze(1)
-        mean = self._embedding.weight[useful_codes].mean(0).unsqueeze(0)
-        var = self._embedding.weight[useful_codes].var(0).unsqueeze(0)
-        eps = torch.randn((len(dead_codes), self._embedding_dim)).to(var.device)
-        rand_codes = eps*var + mean
+        eps = torch.randn((len(dead_codes), self._embedding_dim)).to(self._embedding.weight.device)
+        rand_codes = eps*self.data_std + self.data_mean
 
         with torch.no_grad():
             self._embedding.weight[dead_codes] = rand_codes
         self._embedding.weight.requires_grad = True
 
 
-        if self.qk:
-            mean = self.mu_embeddings.weight[useful_codes].mean(0).unsqueeze(0)
-            var = self.mu_embeddings.weight[useful_codes].var(0).unsqueeze(0)
-            eps = torch.randn((len(dead_codes), self._embedding_dim)).to(var.device)
-            rand_codes = eps*var + mean
-
-            with torch.no_grad():
-                self.mu_embeddings.weight[dead_codes] = rand_codes
-            self.mu_embeddings.weight.requires_grad = True
-
-            mean = self.sigma_embeddings.weight[useful_codes].mean(0).unsqueeze(0)
-            var = self.sigma_embeddings.weight[useful_codes].var(0).unsqueeze(0)
-            eps = torch.randn((len(dead_codes), self._embedding_dim)).to(var.device)
-            rand_codes = eps*var + mean
-
-            with torch.no_grad():
-                self.sigma_embeddings.weight[dead_codes] = rand_codes
-            self.sigma_embeddings.weight.requires_grad = True
-        # print ('Restarting dead cb embeddings...: ', len(dead_codes))
-
 
     def entire_cb_restart(self):
-        mean = self._embedding.weight.mean(0).unsqueeze(0)
-        var = self._embedding.weight.var(0).unsqueeze(0)
-        eps = torch.randn((self._num_embeddings, self._embedding_dim)).to(var.device)
-        rand_codes = eps*var + mean
+        eps = torch.randn((self._num_embeddings, self._embedding_dim)).to(self._embedding.weight.device)
+        rand_codes = eps*self.data_std + self.data_mean
 
         with torch.no_grad():
             self._embedding.weight[:] = rand_codes
@@ -404,6 +390,14 @@ class VectorQuantizerEMA(nn.Module):
         input_shape = features.shape
         features = features.view(-1, self._embedding_dim)
         
+
+        # layer norm on features
+        features = self.norm_input(features)
+
+        # update data stats
+        self.data_mean = 0.9*self.data_mean + 0.1*features.clone().detach().mean(0)
+        self.data_std = 0.9*self.data_std + 0.1*features.clone().detach().std(0)
+
         # Calculate distances
         distances = self._get_distance(features, self._embedding.weight)
 
@@ -460,7 +454,6 @@ class VectorQuantizerEMA(nn.Module):
 
         # Flatten input
         flat_input = inputs.view(-1, self._embedding_dim)
-        
 
 
         klloss = 0

@@ -86,7 +86,6 @@ class SlotAttention(nn.Module):
         # ===========================================
 
         self.to_q = nn.Linear(dim, dim)
-        self.to_k = nn.Linear(dim, dim)
         self.to_v = nn.Linear(dim, dim)
 
         self.gru = nn.GRUCell(dim, dim)
@@ -99,18 +98,21 @@ class SlotAttention(nn.Module):
 
 
         self.norm_input  = nn.LayerNorm(dim)
+
         self.norm_slots  = nn.LayerNorm(dim)
         self.norm_pre_ff = nn.LayerNorm(dim)
 
 
 
-        if self.no_position:
-            self.to_k_np = nn.Linear(dim, dim)
-            self.encoder_norm_np = nn.LayerNorm([ntokens, dim])
-            self.encoder_feature_mlp_np = nn.Sequential(nn.Linear(dim, dim),
-                                                nn.ReLU(inplace=True),
-                                                nn.Linear(dim, dim),
-                                                nn.ReLU(inplace=True))
+        # self.to_k = nn.Linear(dim, dim)
+        # if self.no_position:
+        self.norm_input_np  = nn.LayerNorm(dim)
+        self.to_k_np = nn.Linear(dim, dim)
+        self.encoder_norm_np = nn.LayerNorm([ntokens, dim])
+        self.encoder_feature_mlp_np = nn.Sequential(nn.Linear(dim, dim),
+                                            nn.ReLU(inplace=True),
+                                            nn.Linear(dim, dim),
+                                            nn.ReLU(inplace=True))
 
         # ===================================
         if self.quantize:
@@ -165,21 +167,21 @@ class SlotAttention(nn.Module):
         return features.permute(0, 3, 1, 2)
 
 
+    def normalize(self, x, dim =1):
+        return (x - x.min(dim, keepdim=True)[0])/ \
+                (x.max(dim, keepdim=True)[0] - x.min(dim, keepdim=True)[0] + 0.0001)
+
 
     def passthrough_eigen_basis(self, x):
         # x: token embeddings B x ntokens x token_embeddings
 
         x = F.normalize(x, p=2, dim=-1)
-        coveriance_matrix = torch.einsum('bkf, bgf -> bkg', x, x)
+        coveriance_matrix = torch.einsum('bkf, bgf -> bkg', x, x) + 0.0001
 
-        if self.cov_binarize:
-            # apply softmax on token dimension 
-            # feats = torch.softmax(feats, dim = 1)
-            # feats = feats / feats.sum(dim=-1, keepdim=True)
-            
-            coveriance_matrix = torch.sigmoid(coveriance_matrix)
-            coveriance_matrix[coveriance_matrix >= 0.5] = 1
-            coveriance_matrix[coveriance_matrix < 0.5] = 0
+        # if self.cov_binarize:
+        #     # apply softmax on token dimension 
+        #     coveriance_matrix = torch.softmax(coveriance_matrix, dim = 1)
+
 
 
         # eigen vectors are arranged in ascending order of their eigen values, so picking last n objects
@@ -188,15 +190,16 @@ class SlotAttention(nn.Module):
         # eigen_vectors = eigen_vectors[:, :, -self.nunique_slots+1:].permute(0, 2, 1)
         # eigen_values = eigen_values[:, -self.nunique_slots+1:]
 
-        eigen_vectors = eigen_vectors.permute(0, 2, 1)
-        eigen_values = eigen_values
-        
-        eigen_vectors = eigen_vectors.softmax(dim = -1) + self.eps
+
+        eigen_vectors = eigen_vectors.permute(0, 2, 1)        
+        # eigen_vectors = eigen_vectors.softmax(dim = -1) + self.eps
         # eigen_vectors = eigen_vectors/torch.sum(eigen_vectors, dim =-1, keepdim=True)
 
         eigen_vectors = torch.flip(eigen_vectors, [1])
         eigen_values = torch.flip(eigen_values, [1])
-        return eigen_vectors, eigen_values
+
+
+        return eigen_vectors, self.normalize(eigen_values, 1)
 
 
     def extract_eigen_basis(self, features, batch=None):
@@ -274,75 +277,52 @@ class SlotAttention(nn.Module):
             x = f(x)
         return x
 
-    
 
-    def forward(self, inputs, num_slots = None, epoch=0, batch= 0, train = True, images=None):
+    def sample_slots(self, inputs, n_s, k, batch = 0, images=None):
         b, d, w, h = inputs.shape
-        n_s = num_slots if num_slots is not None else self.num_slots        
-        
         qloss = torch.Tensor([0]).to(inputs.device)
         cbidxs = torch.Tensor([[0]]).to(inputs.device)
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
-        # ========================
-        inputs_features = self.encoder_transformation(inputs, position = True)
-        inputs_features = self.norm_input(inputs_features)
-
-
-        k = self.to_k(inputs_features)
-        v = self.to_v(inputs_features)
-
-
-
         if self.quantize:
-
-            # with torch.no_grad():
-            if self.no_position:
-                inputs_features_noposition = self.encoder_transformation(inputs, position = False)
-                k_noposition =  self.to_k_np(inputs_features_noposition)
-            else:
-                inputs_features_noposition = inputs_features
-                k_noposition = k
-            # k_noposition = k + (k_noposition - k).detach() 
-
-
-
             if self.eigen_quantizer:
-                # eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
-                eigen_basis, eigen_values = self.extract_eigen_basis(k_noposition, batch=images)
-                objects = self.masked_projection(k_noposition, eigen_basis)   
+                eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
+                # eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
+                objects = self.masked_projection(k, eigen_basis)   
+
+                # nunique elements based on 50% quantile or mean of the distribution
+                nunique = torch.sum(eigen_values > eigen_values.mean(1, keepdim=True), 1).detach().cpu().tolist()
+
 
                 # context loss
-                qloss += F.mse_loss(objects.mean(1), k_noposition.mean(1))
+                qloss += F.mse_loss(objects.mean(1), k.mean(1))
 
-                qloss1, _, _, _, _ = self.slot_quantizer(objects, 
+                qloss1, _, perplexity, _, _ = self.slot_quantizer(objects, 
                                                     avg = False, 
                                                     unique=True,
-                                                    nunique=self.nunique_slots +1,
+                                                    nunique=nunique,
                                                     loss_type = 0,
                                                     update = self.restart_cbstats,
                                                     reset_usage = (batch == 0))
+
                 qloss += qloss1 
 
-
                 # sample objects
-                objects, cbidxs, _, slots = self.slot_quantizer.sample(k_noposition)
-                                                            # , 
+                objects, cbidxs, _, slots = self.slot_quantizer.sample(k)
+                                                            # ,
                                                             # unique=True,
                                                             # nunique=self.nunique_slots +1)
 
             else:
-                qloss, objects, perplexity, cbidxs, slots = self.slot_quantizer(k_noposition, 
+                qloss, objects, perplexity, cbidxs, slots = self.slot_quantizer(k, 
                                                     avg = False, 
                                                     unique=False,
                                                     loss_type = 0,
                                                     update = self.restart_cbstats,
                                                     reset_usage = (batch == 0))
             
-
-
-
-            # if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): self.slot_quantizer.entire_cb_restart()
+            # if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
+            #     self.slot_quantizer.entire_cb_restart()
 
             if self.cb_querykey: slots = slots[:, :n_s, :]
             else: slots = objects[:, :n_s, :]
@@ -353,39 +333,35 @@ class SlotAttention(nn.Module):
             sigma = torch.exp(0.5*self.slots_sigma.expand(b, n_s, -1))
             slots = torch.normal(mu, sigma)
         
+        return slots, qloss, perplexity, cbidxs
 
 
+    def forward(self, inputs, num_slots = None, epoch=0, batch= 0, train = True, images=None):
+        
+        n_s = num_slots if num_slots is not None else self.num_slots        
+
+        # Compute Projections ========================
+        inputs_features = self.encoder_transformation(inputs, position = True)
+        inputs_features_noposition = self.encoder_transformation(inputs, position = False)
+
+        inputs_features = self.norm_input(inputs_features)
+        inputs_features_noposition = self.norm_input_np(inputs_features_noposition)
+
+        k_noposition =  self.to_k_np(inputs_features_noposition)
+        v = self.to_v(inputs_features)
+
+
+        # Sample Slots ========================
+        slots, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, batch, images)
+        
+
+        # Slot attention ===================
         if not self.implicit:
-            slots = self.iterate(lambda z: self.step(z, k, v), slots, self.iters)
+            slots = self.iterate(lambda z: self.step(z, k_noposition, v), slots, self.iters)
         else:
-            slots = self.iterate(lambda z: self.step(z, k, v), slots, self.iters)
-            prev_slots = slots
-            slots = self.step(slots.detach(), k, v)
+            slots = self.iterate(lambda z: self.step(z, k_noposition, v), slots, self.iters)
+            slots = self.step(slots.detach(), k_noposition, v)
 
-
-            # if self.training:                
-            #     # Jacobian-related computations, see additional step above. For instance:
-            #     jac_loss = jac_loss_estimate(slots, prev_slots, vecs=1)
-            #     f_thres=30
-            #     b_thres=40
-
-            #     qloss += 0.001*jac_loss.mean()
-
-            #     def backward_hook(grad):
-            #         if self.hook is not None:
-            #             self.hook.remove()
-            #             torch.cuda.synchronize()   # To avoid infinite recursion
-
-            #         # Compute the fixed point of yJ + grad, where J=J_f is the Jacobian of f at z_star
-            #         new_grad = self.solver(lambda y: autograd.grad(slots, 
-            #                                                         prev_slots, 
-            #                                                         y, 
-            #                                                         retain_graph=True)[0] + grad, \
-            #                                         torch.zeros_like(grad), 
-            #                                         threshold=b_thres)['result']
-            #         return new_grad
-
-            #     self.hook = slots.register_hook(backward_hook)
 
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
 

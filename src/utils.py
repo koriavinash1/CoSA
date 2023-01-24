@@ -173,7 +173,8 @@ def compute_eigen(
             # No color affinity
             W_color = 0
             
-            
+        
+        import pdb;pdb.set_trace()
         W_comb = W_feat + W_color * image_color_lambda  # combination
         D_comb = np.array(get_diagonal(W_comb).todense())  # is dense or sparse faster? not sure, should check
 
