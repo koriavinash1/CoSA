@@ -19,7 +19,7 @@ def unique_sampling_fn(distances, nunique=-1):
     # distance: Bxntokensxncbtokens
 
     B, S, N = distances.shape
-    if not isinstance(nunique, list):
+    if not (isinstance(nunique, list) or isinstance(nunique, np.ndarray)):
         if (nunique == -1): 
             nunique = min(S, N)
         nunique = [nunique]*B
@@ -339,7 +339,7 @@ class VectorQuantizerEMA(nn.Module):
             self.mu_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             self.sigma_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             nn.init.xavier_uniform_(self.mu_embeddings.weight)
-            nn.init.xavier_uniform_(self.sigma_embeddings.weight)
+            nn.init.constant_(self.sigma_embeddings.weight, 0)
 
 
         # ======================
@@ -516,7 +516,7 @@ class VectorQuantizerEMA(nn.Module):
         #     slot_logvar = self.sigma_embeddings.weight
 
 
-        # loss += get_cb_variance(self._embedding.weight)
+        loss += get_cb_variance(self._embedding.weight)
         loss += klloss
         loss += qkloss
 

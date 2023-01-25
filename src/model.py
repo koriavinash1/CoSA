@@ -58,6 +58,7 @@ class SlotAttention(nn.Module):
         self.quantize = quantize
         self.cov_binarize = cov_binarize
         self.no_position = no_position
+        self.min_number_elements = 3 + 1
 
         assert self.num_slots < np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
 
@@ -278,7 +279,7 @@ class SlotAttention(nn.Module):
         return x
 
 
-    def sample_slots(self, inputs, n_s, k, batch = 0, images=None):
+    def sample_slots(self, inputs, n_s, k, epoch = 0, batch = 0, images=None):
         b, d, w, h = inputs.shape
         qloss = torch.Tensor([0]).to(inputs.device)
         cbidxs = torch.Tensor([[0]]).to(inputs.device)
@@ -291,11 +292,12 @@ class SlotAttention(nn.Module):
                 objects = self.masked_projection(k, eigen_basis)   
 
                 # nunique elements based on 50% quantile or mean of the distribution
-                nunique = torch.sum(eigen_values > eigen_values.mean(1, keepdim=True), 1).detach().cpu().tolist()
+                nunique = torch.sum(eigen_values > eigen_values.mean(1, keepdim=True), 1).detach().cpu().numpy()
+                nunique = np.maximum(nunique, self.min_number_elements)
 
 
                 # context loss
-                qloss += F.mse_loss(objects.mean(1), k.mean(1))
+                qloss += 0.01*F.mse_loss(objects.mean(1), k.mean(1))
 
                 qloss1, _, perplexity, _, _ = self.slot_quantizer(objects, 
                                                     avg = False, 
@@ -321,8 +323,8 @@ class SlotAttention(nn.Module):
                                                     update = self.restart_cbstats,
                                                     reset_usage = (batch == 0))
             
-            # if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
-            #     self.slot_quantizer.entire_cb_restart()
+            if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
+                self.slot_quantizer.entire_cb_restart()
 
             if self.cb_querykey: slots = slots[:, :n_s, :]
             else: slots = objects[:, :n_s, :]
@@ -352,7 +354,7 @@ class SlotAttention(nn.Module):
 
 
         # Sample Slots ========================
-        slots, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, batch, images)
+        slots, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, epoch, batch, images)
         
 
         # Slot attention ===================

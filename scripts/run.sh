@@ -15,7 +15,7 @@ BINARIZE=${14}
 NAME=${15}
 ITER=${16}
 
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSQKDlrMVar'
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/Testingsss'
 python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --exp_name $NAME \
                                             --batch_size 16 \
