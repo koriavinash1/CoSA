@@ -12,6 +12,7 @@ import torch
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -121,9 +122,9 @@ val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
 train_epoch_size = len(train_dataloader)
 val_epoch_size = len(val_dataloader)
 
-log_interval = train_epoch_size // 5
-
+opt.log_interval = train_epoch_size // 5
 optimizer = optim.Adam(params, lr=opt.learning_rate)
+lrscheduler = ReduceLROnPlateau(optimizer, 'min')
 
 # criterion = nn.MSELoss()
 
@@ -200,48 +201,25 @@ def dice_loss(masks):
 
     return loss*1.0/len(idxs)
 
-start = time.time()
-i = 0
-lr_decay_factor = 1
-recon_history = [0]*5
 
-for epoch in range(opt.num_epochs):
-    model.train()
-
-    total_loss = 0
+def training_step(model, optimizer, epoch, opt):
     idxs = []
-
+    total_loss = 0; recon_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
-        i += 1
-        global_step = epoch * train_epoch_size + i
-
-        # lr_warmup_factor = linear_warmup(
-        #     global_step,
-        #     0.,
-        #     1.0,
-        #     0,
-        #     opt.warmup_steps)
-
-        # if i < opt.warmup_steps:
-        #     learning_rate = opt.learning_rate * (i / opt.warmup_steps)
-        # else:
-        #     learning_rate = opt.learning_rate
-
-        # learning_rate = learning_rate * (opt.decay_rate ** (
-        #                                     i / opt.decay_steps))
-
-        lr_warmup_factor = 1
-        learning_rate = lr_decay_factor * lr_warmup_factor * opt.learning_rate
-        optimizer.param_groups[0]['lr'] = learning_rate
-        
+        global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
-        recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, epoch=epoch, batch=ibatch)
-        recon_loss = ((image - recon_combined)**2).mean()
+        recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, 
+                                                                                epoch=epoch, 
+                                                                                batch=ibatch)
+        recon_loss_ = ((image - recon_combined)**2).mean()
         
-        overlap_loss = dice_loss(masks)
-        loss = recon_loss + 0.5*qloss + opt.overlap_weightage*overlap_loss
+        overlap_loss_ = dice_loss(masks)
+        loss = recon_loss_ + 0.5*qloss + opt.overlap_weightage*overlap_loss_
 
         total_loss += loss.item()
+        recon_loss += recon_loss_.item()
+        quant_loss += qloss.item()
+        overlap_loss += overlap_loss_.item()
 
 
         optimizer.zero_grad()
@@ -252,50 +230,124 @@ for epoch in range(opt.num_epochs):
         idxs.append(cbidxs)
 
         with torch.no_grad():
-            if i % log_interval == 0:            
+            if ibatch % opt.log_interval == 0:            
                 writer.add_scalar('TRAIN/loss', loss.item(), global_step)
-                writer.add_scalar('TRAIN/recon', recon_loss.item(), global_step)
-                writer.add_scalar('TRAIN/overlap', overlap_loss.item(), global_step)
+                writer.add_scalar('TRAIN/recon', recon_loss_.item(), global_step)
+                writer.add_scalar('TRAIN/overlap', overlap_loss_.item(), global_step)
                 writer.add_scalar('TRAIN/perplexity', perplexity.item(), global_step)
                 writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
                 writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
                 writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
 
-            if (i % train_epoch_size) == train_epoch_size - 1:
-                attns = recons * masks + (1 - masks)
-                vis_recon = visualize(image, recon_combined, attns, N=32)
-                grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 2, pad_value=0.2)[:, 2:-2, 2:-2]
-                writer.add_image('TRAIN_recon/epoch={:03}'.format(epoch+1), grid)
+    with torch.no_grad():
+        attns = recons * masks + (1 - masks)
+        vis_recon = visualize(image, recon_combined, attns, N=32)
+        grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 2, pad_value=0.2)[:, 2:-2, 2:-2]
+        writer.add_image('TRAIN/recon_epoch={:03}'.format(epoch+1), grid)
 
         del recons, masks, slots
 
-    total_loss /= len(train_dataloader)
-    
-    recon_history.append(total_loss)
-    recon_history = recon_history[1:]
+    idxs = torch.cat(idxs, 0)
+    return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
+                        'recon_loss': recon_loss*1.0/train_epoch_size,
+                        'quant_loss': quant_loss*1.0/train_epoch_size,
+                        'overlap_loss': overlap_loss*1.0/train_epoch_size,
+                        'unique_idxs': torch.unique(idxs).cpu().numpy()}
 
+    return return_stats
+
+
+@torch.no_grad()
+def validation_step(model, optimizer, epoch, opt):
+    idxs = []
+    total_loss = 0; recon_loss = 0; quant_loss = 0; overlap_loss = 0
+    for ibatch, sample in tqdm(enumerate(val_dataloader)):
+        global_step = epoch * val_epoch_size + ibatch
+        image = sample['image'].to(device)
+        recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, 
+                                                                                epoch=epoch, 
+                                                                                batch=ibatch)
+        recon_loss_ = ((image - recon_combined)**2).mean()
+        
+        overlap_loss_ = dice_loss(masks)
+        loss = recon_loss_ + 0.5*qloss + opt.overlap_weightage*overlap_loss_
+
+        total_loss += loss.item()
+        recon_loss += recon_loss_.item()
+        quant_loss += qloss.item()
+        overlap_loss += overlap_loss_.item()
+
+
+        idxs.append(cbidxs)
+
+        if ibatch % opt.log_interval == 0:            
+            writer.add_scalar('VALID/loss', loss.item(), global_step)
+            writer.add_scalar('VALID/recon', recon_loss_.item(), global_step)
+            writer.add_scalar('VALID/overlap', overlap_loss_.item(), global_step)
+            writer.add_scalar('VALID/perplexity', perplexity.item(), global_step)
+            writer.add_scalar('VALID/quant', qloss.item(), global_step)
+            writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
+            writer.add_scalar('VALID/lr', optimizer.param_groups[0]['lr'], global_step)
+
+
+    attns = recons * masks + (1 - masks)
+    vis_recon = visualize(image, recon_combined, attns, N=32)
+    grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 2, pad_value=0.2)[:, 2:-2, 2:-2]
+    writer.add_image('VALID/recon_epoch={:03}'.format(epoch+1), grid)
+
+    del recons, masks, slots
 
     idxs = torch.cat(idxs, 0)
-    print ("EXP: {}, Epoch: {}, RECON:{}, Loss: {}, CB_VAR: {}, Time: {}".format(opt.exp_name,
-                                                        epoch, recon_loss.item(), total_loss, 
-                                                        torch.unique(idxs),
-                                                        timedelta(seconds=time.time() - start)))
+    return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
+                        'recon_loss': recon_loss*1.0/train_epoch_size,
+                        'quant_loss': quant_loss*1.0/train_epoch_size,
+                        'overlap_loss': overlap_loss*1.0/train_epoch_size,
+                        'unique_idxs': torch.unique(idxs).cpu().numpy()}
+    return return_stats
 
+
+
+start = time.time()
+min_recon_loss = 1000000.0
+
+for epoch in range(opt.num_epochs):
+    model.train()
+    training_stats = training_step(model, optimizer, epoch, opt)
+    print ("TrainingLogs Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
+                                                        opt.exp_name,
+                                                        epoch, 
+                                                        training_stats
+                                                        ))
+
+
+    model.eval()
+    validation_stats = validation_step(model, optimizer, epoch, opt)
+    print ("ValidationLogs Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
+                                                        opt.exp_name,
+                                                        epoch, 
+                                                        validation_stats
+                                                        ))
+    print ('='*50)
+
+    lrscheduler.step(validation_stats['recon_loss'])
+
+    if min_recon_loss > validation_stats['recon_loss']:
+        min_recon_loss = validation_stats['recon_loss']
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'epoch': epoch,
+            'vstats': validation_stats,
+            'tstats': training_stats, 
+            }, 
+            os.path.join(opt.model_dir, f'best.pth'))
+
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'epoch': epoch,
+        'vstats': validation_stats,
+        'tstats': training_stats, 
+        }, 
+        os.path.join(opt.model_dir, f'last.pth'))
 
     if epoch > 5:
         opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)
-    
-    if not epoch % 10: # (np.mean(recon_history) > total_loss):   
-        print (recon_history, np.mean(recon_history),  total_loss)
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'epoch': epoch
-            }, os.path.join(opt.model_dir, f'ckpt_{epoch}.pth'))
-
-
-    if (epoch > 10) and (np.mean(recon_history) < total_loss):
-        lr_decay_factor *= 0.5
-
-
-    # if epoch % 50 == 49:
-    #     lr_decay_factor *= 0.5
