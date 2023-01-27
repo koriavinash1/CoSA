@@ -60,6 +60,11 @@ parser.add_argument('--cb_qk', type=str2bool, default=False)
 parser.add_argument('--eigen_quantizer', type=str2bool, default=False)
 parser.add_argument('--restart_cbstats', type=str2bool, default=False)
 
+parser.add_argument('--implicit', type=str2bool, default=True)
+parser.add_argument('--gumble', type=str2bool, default=False)
+parser.add_argument('--temperature', type=float, default=1.0)
+parser.add_argument('--kld_scale', type=float, default=1.0)
+
 
 
 
@@ -86,16 +91,18 @@ model = SlotAttentionAutoEncoder(resolution,
                                     opt.nunique_objects,
                                     opt.quantize,
                                     opt.cosine,
-                                    opt.unique_sampling,
                                     opt.cb_decay,
                                     opt.encoder_res,
                                     opt.decoder_res,
                                     opt.variational,
                                     opt.binarize,
-                                    opt.eigen_noposition,
                                     opt.cb_qk,
                                     opt.eigen_quantizer,
-                                    opt.restart_cbstats).to(device)
+                                    opt.restart_cbstats,
+                                    opt.implicit,
+                                    opt.gumble,
+                                    opt.temperature,
+                                    opt.kld_scale).to(device)
 # model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
 
 criterion = nn.MSELoss()

@@ -27,7 +27,6 @@ class SlotAttention(nn.Module):
                         hidden_dim = 128,
                         max_slots=64, 
                         nunique_slots=8,
-                        temp=1,
                         beta=0.75,
                         encoder_intial_res=(8, 8),
                         decoder_intial_res=(8, 8),
@@ -38,8 +37,11 @@ class SlotAttention(nn.Module):
                         eigen_quantizer=False,
                         cb_variational=False,
                         cov_binarize=False,
-                        no_position=True,
-                        restart_cbstats=False
+                        restart_cbstats=False,
+                        implicit=True,
+                        gumble=False,
+                        temperature=1.0,
+                        kld_scale=1.0
                         ):
         super().__init__()
         self.num_slots = num_slots
@@ -47,17 +49,16 @@ class SlotAttention(nn.Module):
         self.eps = eps
         self.dim = dim
         self.scale = dim ** -0.5
-        self.temperature = temp
-        self.implicit = True
+        self.implicit = implicit
         self.cb_querykey = cb_querykey
         self.eigen_quantizer = eigen_quantizer
         self.restart_cbstats = restart_cbstats
         ntokens = np.prod(encoder_intial_res)
         
+        self.max_slots = max_slots
         self.nunique_slots = nunique_slots
         self.quantize = quantize
         self.cov_binarize = cov_binarize
-        self.no_position = no_position
         self.min_number_elements = 3 + 1
 
         assert self.num_slots < np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
@@ -120,29 +121,33 @@ class SlotAttention(nn.Module):
             if cb_decay > 0.0:
                 self.slot_quantizer = VectorQuantizerEMA(max_slots,
                                                     self.dim,
+                                                    self.dim,
                                                     commitment_cost=beta,
                                                     decay=cb_decay,
                                                     cosine=cosine,
                                                     variational=cb_variational,
-                                                    qk=self.cb_querykey)
-                print ('VQVAE MODEL EMA', cb_decay)
+                                                    qk=self.cb_querykey,
+                                                    gumble=gumble,
+                                                    temperature=temperature,
+                                                    kld_scale=kld_scale)
+                print ('VQVAE MODEL EMA', cb_decay, gumble)
             else:
                 self.slot_quantizer = VectorQuantizer(max_slots,
+                                                    self.dim,
                                                     self.dim,
                                                     commitment_cost=beta,
                                                     cosine=cosine,
                                                     variational=cb_variational,
-                                                    qk=self.cb_querykey)
-                print ('VQVAE model', cb_decay)
+                                                    qk=self.cb_querykey,
+                                                    gumble=gumble,
+                                                    temperature=temperature,
+                                                    kld_scale=kld_scale)
+                print ('VQVAE model', cb_decay, gumble)
         else:         
             self.slots_mu    = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
             self.slots_sigma = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
 
 
-
-
-        if self.implicit:
-            self.solver = broyden
 
 
     def encoder_transformation(self, features, position=True):
@@ -219,7 +224,7 @@ class SlotAttention(nn.Module):
                                         binarize = self.cov_binarize,
                                         lapnorm = True,
                                         threshold_at_zero = True,
-                                        image_color_lambda = 0 if batch is None else 10)
+                                        image_color_lambda = 0 if batch is None else 1.0)
 
             batched_concepts.append(eigen_vectors.unsqueeze(0))
             batched_scale.append(eigen_values.unsqueeze(0))
@@ -290,11 +295,9 @@ class SlotAttention(nn.Module):
                 eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
                 # eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
                 objects = self.masked_projection(k, eigen_basis)   
-
                 # nunique elements based on 50% quantile or mean of the distribution
                 nunique = torch.sum(eigen_values > eigen_values.mean(1, keepdim=True), 1).detach().cpu().numpy()
                 nunique = np.maximum(nunique, self.min_number_elements)
-
 
                 # context loss
                 qloss += 0.01*F.mse_loss(objects.mean(1), k.mean(1))
@@ -310,7 +313,7 @@ class SlotAttention(nn.Module):
                 qloss += qloss1 
 
                 # sample objects
-                objects, cbidxs, _, slots = self.slot_quantizer.sample(k)
+                objects, cbidxs, _, slots, _ = self.slot_quantizer.sample(k, st=True)
                                                             # ,
                                                             # unique=True,
                                                             # nunique=self.nunique_slots +1)
@@ -494,16 +497,18 @@ class SlotAttentionAutoEncoder(nn.Module):
                         nunique_slots=10,
                         quantize=False,
                         cosine=False, 
-                        unique_samling=False, 
                         cb_decay=0.99,
                         encoder_res=4,
                         decoder_res=4,
                         variational=False, 
                         binarize=False,
-                        no_position=True,
                         cb_qk=False,
                         eigen_quantizer=False,
-                        restart_cbstats=False
+                        restart_cbstats=False,
+                        implicit=True,
+                        gumble=False,
+                        temperature=1.0,
+                        kld_scale=1.0
                         ):
         """Builds the Slot Attention-based auto-encoder.
         Args:
@@ -536,10 +541,13 @@ class SlotAttentionAutoEncoder(nn.Module):
             decoder_intial_res=(decoder_res, decoder_res),
             cb_variational=variational,
             cov_binarize=binarize,
-            no_position=no_position,
             cb_querykey=cb_qk,
             eigen_quantizer=eigen_quantizer,
-            restart_cbstats=restart_cbstats)
+            restart_cbstats=restart_cbstats,
+            implicit=implicit,
+            gumble=gumble,
+            temperature=temperature,
+            kld_scale=kld_scale)
 
 
     def forward(self, image, num_slots=None, epoch=0, batch=0):

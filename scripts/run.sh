@@ -4,7 +4,7 @@ IMSIZE=$3
 CBDECAY=$4
 NCONCEPTS=$5
 OPWEIGHTAGE=$6
-NOPOSITION=${7}
+GUMBLE=${7}
 QUANTIZE=$8
 COSINE=$9
 VAR=${10}
@@ -31,7 +31,7 @@ python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --quantize $QUANTIZE \
                                             --cosine $COSINE \
                                             --binarize $BINARIZE \
-                                            --eigen_noposition $NOPOSITION \
+                                            --gumble $GUMBLE \
                                             --variational $VAR \
                                             --num_iterations $ITER \
                                             --cb_qk $CBQKEY \

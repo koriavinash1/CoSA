@@ -119,9 +119,9 @@ def compute_eigen(
         W = (W * (W > 0))
 
 
-    if binarize:
-        # apply softmax on token dimension 
-        W = torch.softmax(W, dim = 1)
+    # if binarize:
+    #     # apply softmax on token dimension 
+    #     W = torch.softmax(W, dim = 1)
         
         # W = torch.sigmoid(W)
         # W[W >= 0.5] = 1
@@ -167,14 +167,13 @@ def compute_eigen(
 
             # Convert to dense numpy array
             W_color = np.array(W_lr.todense().astype(np.float32))
-
+            W_color *=0.25
         else:
 
             # No color affinity
             W_color = 0
             
         
-        import pdb;pdb.set_trace()
         W_comb = W_feat + W_color * image_color_lambda  # combination
         D_comb = np.array(get_diagonal(W_comb).todense())  # is dense or sparse faster? not sure, should check
 
@@ -195,7 +194,6 @@ def compute_eigen(
     for k in range(eigenvectors.shape[0]):
         if 0.5 < torch.mean((eigenvectors[k] > 0).float()).item() < 1.0:  # reverse segment
             eigenvectors[k] = 0 - eigenvectors[k]
-
 
 
     # normalization of eigen vectors
