@@ -272,7 +272,6 @@ class SlotAttention(nn.Module):
         )
 
         slots = slots.reshape(k.shape[0], -1, self.dim)
-        # slots = self.positional_encoder(slots)
         slots = slots + self.mlp(self.norm_pre_ff(slots))
 
         return slots 
@@ -291,6 +290,10 @@ class SlotAttention(nn.Module):
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
         if self.quantize:
+            if self.restart_cbstats and (epoch % 2 == 1) and (batch == 0) and (epoch < 25): 
+                self.slot_quantizer.entire_cb_restart()
+
+
             if self.eigen_quantizer:
                 eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
                 # eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
@@ -321,13 +324,12 @@ class SlotAttention(nn.Module):
             else:
                 qloss, objects, perplexity, cbidxs, slots = self.slot_quantizer(k, 
                                                     avg = False, 
-                                                    unique=False,
                                                     loss_type = 0,
+                                                    unique=True,
+                                                    nunique=self.nunique_slots +1,
                                                     update = self.restart_cbstats,
                                                     reset_usage = (batch == 0))
             
-            if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
-                self.slot_quantizer.entire_cb_restart()
 
             if self.cb_querykey: slots = slots[:, :n_s, :]
             else: slots = objects[:, :n_s, :]
@@ -335,9 +337,13 @@ class SlotAttention(nn.Module):
             cbidxs = cbidxs[:, :n_s]
         else:
             mu = self.slots_mu.expand(b, n_s, -1)
-            sigma = torch.exp(0.5*self.slots_sigma.expand(b, n_s, -1))
+            slot_sigma = self.slots_sigma.expand(b, n_s, -1)
+            slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
+
+            sigma = torch.exp(0.5*slot_sigma)
             slots = torch.normal(mu, sigma)
         
+        slots = self.positional_encoder(slots)
         return slots, qloss, perplexity, cbidxs
 
 
@@ -367,6 +373,16 @@ class SlotAttention(nn.Module):
             slots = self.iterate(lambda z: self.step(z, k_noposition, v), slots, self.iters)
             slots = self.step(slots.detach(), k_noposition, v)
 
+
+        # update slots ===================
+        if self.quantize:
+            qloss1, _, _, _, _ = self.slot_quantizer(slots.clone().detach(), 
+                                                    avg = False, 
+                                                    loss_type = 1,
+                                                    unique=True,
+                                                    final=True,
+                                                    nunique=self.nunique_slots +1)
+            qloss += qloss1
 
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
 

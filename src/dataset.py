@@ -17,7 +17,7 @@ class DataGenerator(Dataset):
         self.root_dir = root     
         self.resolution = resolution
         self.files = os.listdir(os.path.join(self.root_dir, self.mode, 'images'))
-        # self.files = self.files[:1000]
+        # self.files = self.files[:100]
         self.img_transform = transforms.Compose([
                                         transforms.Resize(resolution),
                                         # transforms.RandomAffine(15, 

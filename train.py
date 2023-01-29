@@ -41,7 +41,7 @@ parser.add_argument('--decoder_res', default=8, type=int)
 parser.add_argument('--warmup_steps', default=10000, type=int, help='Number of warmup steps for the learning rate.')
 parser.add_argument('--decay_rate', default=0.5, type=float, help='Rate for the learning rate decay.')
 parser.add_argument('--decay_steps', default=100000, type=int, help='Number of steps for the learning rate decay.')
-parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
+parser.add_argument('--num_workers', default=10, type=int, help='number of workers for loading data')
 parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
 
 parser.add_argument('--quantize', default=False, type=str2bool, help='perform slot quantization')
@@ -224,7 +224,7 @@ def training_step(model, optimizer, epoch, opt):
 
         optimizer.zero_grad()
         loss.backward()
-        clip_grad_norm_(model.parameters(), 1.0, 'inf')
+        clip_grad_norm_(model.parameters(), 10.0, 'inf')
         optimizer.step()
 
         idxs.append(cbidxs)
@@ -298,10 +298,10 @@ def validation_step(model, optimizer, epoch, opt):
     del recons, masks, slots
 
     idxs = torch.cat(idxs, 0)
-    return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
-                        'recon_loss': recon_loss*1.0/train_epoch_size,
-                        'quant_loss': quant_loss*1.0/train_epoch_size,
-                        'overlap_loss': overlap_loss*1.0/train_epoch_size,
+    return_stats = {'total_loss': total_loss*1.0/val_epoch_size,
+                        'recon_loss': recon_loss*1.0/val_epoch_size,
+                        'quant_loss': quant_loss*1.0/val_epoch_size,
+                        'overlap_loss': overlap_loss*1.0/val_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
     return return_stats
 
@@ -338,16 +338,14 @@ for epoch in range(opt.num_epochs):
             'epoch': epoch,
             'vstats': validation_stats,
             'tstats': training_stats, 
-            }, 
-            os.path.join(opt.model_dir, f'best.pth'))
+            }, os.path.join(opt.model_dir, f'best.pth'))
 
     torch.save({
         'model_state_dict': model.state_dict(),
         'epoch': epoch,
         'vstats': validation_stats,
         'tstats': training_stats, 
-        }, 
-        os.path.join(opt.model_dir, f'last.pth'))
+        }, os.path.join(opt.model_dir, f'last.pth'))
 
     if epoch > 5:
         opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)
