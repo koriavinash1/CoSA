@@ -2,6 +2,7 @@ import os
 import argparse
 from src.dataset import *
 from src.model import *
+from src.metrics import average_precision_clevr
 from tqdm import tqdm
 import time, math
 from datetime import datetime, timedelta
@@ -73,10 +74,9 @@ model = SlotAttentionClassifier(resolution,
                                     exp_arguments['temperature'],
                                     exp_arguments['kld_scale']).to(device)
 
-import pdb;pdb.set_trace()
-# Load all required modules.....
-# model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
-
+ckpt=torch.load(os.path.join(opt.model_dir, 'discovery_best.pth' ))
+model.encoder_cnn.load_state_dict(ckpt['encoder_cnn'])
+model.slot_attention.load_state_dict(ckpt['slot_attention'])
 
 params = [{'params': model.parameters()}]
 
@@ -86,6 +86,10 @@ train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_s
 
 val_set = DataGenerator(root=opt.data_root, mode='val',  resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
+                        shuffle=True, num_workers=opt.num_workers)
+
+test_set = DataGenerator(root=opt.data_root, mode='test',  resolution=resolution)
+test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers)
 
 
@@ -120,8 +124,8 @@ def hungarian_huber_loss(x, y):
     """
 
     # adjust shape for x and y
-    x = ...
-    y = ...
+    # x = ...
+    # y = ...
 
 
     pairwise_cost = F.huber_loss(x, y, reduction='none')
@@ -212,7 +216,7 @@ min_recon_loss = 1000000.0
 for epoch in range(opt.num_epochs):
     model.train()
     training_stats = training_step(model, optimizer, epoch, opt)
-    print ("TrainingLogs Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
+    print ("TrainingLogs Setprediction Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
                                                         opt.exp_name,
                                                         epoch, 
                                                         training_stats
@@ -221,7 +225,7 @@ for epoch in range(opt.num_epochs):
 
     model.eval()
     validation_stats = validation_step(model, optimizer, epoch, opt)
-    print ("ValidationLogs Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
+    print ("ValidationLogs Setprediction Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
                                                         opt.exp_name,
                                                         epoch, 
                                                         validation_stats
@@ -237,14 +241,36 @@ for epoch in range(opt.num_epochs):
             'epoch': epoch,
             'vstats': validation_stats,
             'tstats': training_stats, 
-            }, os.path.join(opt.model_dir, f'best.pth'))
+            }, os.path.join(opt.model_dir, f'setprediction_best.pth'))
 
     torch.save({
         'model_state_dict': model.state_dict(),
         'epoch': epoch,
         'vstats': validation_stats,
         'tstats': training_stats, 
-        }, os.path.join(opt.model_dir, f'last.pth'))
+        }, os.path.join(opt.model_dir, f'setprediction_last.pth'))
 
     if epoch > 5:
         opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)
+
+
+
+
+    # Evaluation metrics....
+    with torch.no_grad():
+        every_nepoch = 10
+        if not epoch  % every_nepoch:
+            # For evaluating the AP score, we get a batch from the validation dataset.
+            ap = [
+                average_precision_clevr(test_dataloader, model, 25, d)
+                for d in [-1., 1., 0.5, 0.25, 0.125]
+            ]
+            print(
+                "AP@inf: %.2f, AP@1: %.2f, AP@0.5: %.2f, AP@0.25: %.2f, AP@0.125: %.2f",
+                ap[0], ap[1], ap[2], ap[3], ap[4])
+
+            writer.add_scalar('VALID/AP@inf', ap[0], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@1', ap[1], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@0.5', ap[2], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@0.25', ap[3], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@0.125', ap[4], epoch//every_nepoch)

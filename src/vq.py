@@ -198,7 +198,7 @@ class BaseVectorQuantizer(nn.Module):
         features = self.norm_input(features)
 
         # update data stats
-        if not final:
+        if final:
             self.data_mean = 0.9*self.data_mean + 0.1*features.clone().detach().mean(0)
             self.data_std = 0.9*self.data_std + 0.1*features.clone().detach().std(0)
 
@@ -261,7 +261,7 @@ class BaseVectorQuantizer(nn.Module):
         features = self.norm_input(features)
 
         # update data stats
-        if not final:
+        if final:
             self.data_mean = 0.9*self.data_mean + 0.1*features.clone().detach().mean(0)
             self.data_std = 0.9*self.data_std + 0.1*features.clone().detach().std(0)
 
@@ -513,7 +513,7 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
 
 
         # Use EMA to update the embedding vectors
-        if self.training and (not final):
+        if self.training and final:
             self._ema_cluster_size = self._ema_cluster_size * self._decay + \
                                      (1 - self._decay) * torch.sum(encodings, 0)
             

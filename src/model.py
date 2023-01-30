@@ -324,7 +324,7 @@ class SlotAttention(nn.Module):
             else:
                 qloss, objects, perplexity, cbidxs, slots = self.slot_quantizer(k, 
                                                     avg = False, 
-                                                    loss_type = 0,
+                                                    loss_type = 2,
                                                     unique=True,
                                                     nunique=self.nunique_slots +1,
                                                     update = self.restart_cbstats,
@@ -612,6 +612,7 @@ class SlotAttentionClassifier(nn.Module):
                         num_slots, 
                         num_iterations, 
                         hid_dim, 
+                        nclasses,
                         max_slots=64, 
                         nunique_slots=10,
                         quantize=False,
@@ -629,6 +630,7 @@ class SlotAttentionClassifier(nn.Module):
                         temperature=1.0,
                         kld_scale=1.0
                         ):
+
     """Builds the Slot Attention-based classifier.
     Args:
       resolution: Tuple of integers specifying width and height of input image.
@@ -636,11 +638,17 @@ class SlotAttentionClassifier(nn.Module):
       num_iterations: Number of iterations in Slot Attention.
     """
     super().__init__()
+
     self.hid_dim = hid_dim
     self.resolution = resolution
     self.num_slots = num_slots
     self.num_iterations = num_iterations
 
+    # nclasses: numpber of nodes as outputs
+    # In case of CLEVR: (coords=3) + (color=8) + (size=2) + (material=2) + (shape=3) + (real=1) = 19
+    self.nclasses = nclasses
+
+    self.encoder_cnn = Encoder(self.resolution, self.hid_dim)
     self.slot_attention = SlotAttention(
             num_slots=self.num_slots,
             dim=hid_dim,
@@ -667,7 +675,7 @@ class SlotAttentionClassifier(nn.Module):
 
     self.mlp_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, nunique_slots),
+                                        nn.Linear(hid_dim, self.nclasses),
                                         nn.Sigmoid())
     
     

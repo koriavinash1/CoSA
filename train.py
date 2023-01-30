@@ -1,7 +1,9 @@
 import os
 import argparse
-from src.dataset import *
-from src.model import *
+from src.dataset import DataGenerator
+from src.model import SlotAttentionAutoEncoder
+from src.metrics import calculate_fid
+
 from tqdm import tqdm
 import time, math
 from datetime import datetime, timedelta
@@ -74,8 +76,6 @@ resolution = (opt.img_size, opt.img_size)
 
 opt.model_dir = os.path.join(opt.model_dir, opt.exp_name)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
 arg_str = '__'.join(arg_str_list)
 
@@ -125,6 +125,10 @@ train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_s
 
 val_set = DataGenerator(root=opt.data_root, mode='val',  resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
+                        shuffle=True, num_workers=opt.num_workers)
+
+test_set = DataGenerator(root=opt.data_root, mode='test',  resolution=resolution)
+test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers)
 
 
@@ -358,3 +362,15 @@ for epoch in range(opt.num_epochs):
 
     if epoch > 5:
         opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)
+
+
+
+    # Evaluation metrics....
+    with torch.no_grad():
+        every_nepoch = 10
+        if not epoch  % every_nepoch:
+            # For evaluating the AP score, we get a batch from the validation dataset.
+            fid = calculate_fid(test_dataloader, model, opt.batch_size, 25, opt.model_dir)
+            print(f'FID Score: {fid}')
+
+            writer.add_scalar('VALID/FID', fid, epoch//every_nepoch)
