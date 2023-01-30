@@ -22,11 +22,11 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
         os.makedirs(real_path)
 
         for batch_num in tqdm(range(num_batches), desc='calculating FID - saving reals'):
-            samples = next(loader)
+            samples = next(iter(loader))
             real_batch = samples['images']
             for k, image in enumerate(real_batch.cpu()):
                 filename = str(k + batch_num * batch_size)
-                torchvision.utils.save_image(image, str(real_path / f'{filename}.png'))
+                torchvision.utils.save_image(image, os.path.join(real_path, f'{filename}.png'))
 
     # generate a bunch of fake images in results / name / fid_fake
 
@@ -36,7 +36,7 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
     model.eval()
    
     for batch_num in tqdm(range(num_batches), desc='calculating FID - saving generated'):
-        samples = next(loader)
+        samples = next(iter(loader))
 
         image = samples['image'].to(model.device)
         recon_combined, *_ = model(image, 
@@ -44,7 +44,7 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
                                 batch=batch_num)
        
         for j, image in enumerate(recon_combined.cpu()):
-            torchvision.utils.save_image(image, str(fake_path / f'{str(j + batch_num * batch_size)}.png'))
+            torchvision.utils.save_image(image, os.path.join(fake_path, f'{str(j + batch_num * batch_size)}.png'))
 
     return fid_score.calculate_fid_given_paths([str(real_path), str(fake_path)], 256, model.device, 2048)
 
@@ -81,7 +81,7 @@ def average_precision_clevr(loader, model, num_batches, distance_threshold):
 
     pred = []; attributes = []
     for batch_num in tqdm(range(num_batches), desc='calculating FID - saving generated'):
-        samples = next(loader)
+        samples = next(iter(loader))
 
         image = samples['image'].to(model.device)
         properties = samples['properties'].to(model.device)
@@ -229,7 +229,7 @@ def accuracy(loader, model, num_batches):
 
     labels = []; predictions = []
     for batch_num in tqdm(range(num_batches), desc='calculating FID - saving generated'):
-        samples = next(loader)
+        samples = next(iter(loader))
 
         image = samples['image'].to(model.device)
         labels = samples['label'].to(model.device)

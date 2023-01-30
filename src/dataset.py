@@ -64,7 +64,7 @@ class DataGenerator(Dataset):
         self.resolution = resolution
         self.mode_type = mode_type
 
-        if self.mode_type == 'set_prediction':
+        if self.mode_type in ['setprediction', 'reasoning']:
             self.files, self.properties = get_paths_with_properties_CLEVR(root, mode, max_objects)
         else:
             self.files = os.listdir(os.path.join(self.root_dir, self.mode, 'images'))
@@ -89,8 +89,10 @@ class DataGenerator(Dataset):
 
         if self.mode_type == 'reasoning':
             target = int(path.split('_')[2])
-            sample = {'image': image, 'target': target}
-        elif self.mode_type == 'set_prediction':
+            property_info = self.properties[index]
+            property_info = torch.from_numpy(property_info)
+            sample = {'image': image, 'target': target, 'properties': property_info}
+        elif self.mode_type == 'setprediction':
             property_info = self.properties[index]
             property_info = torch.from_numpy(property_info)
             sample = {'image': image, 'properties': property_info}

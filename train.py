@@ -9,8 +9,11 @@ import time, math
 from datetime import datetime, timedelta
 from torch.nn.utils import clip_grad_norm_
 
+import numpy as np
+import torch.nn as nn
 import torch.optim as optim
 import torch
+import json
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 
@@ -113,9 +116,9 @@ model = SlotAttentionAutoEncoder(resolution,
                                     opt.gumble,
                                     opt.temperature,
                                     opt.kld_scale).to(device)
+model.device = device
 # model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
 
-criterion = nn.MSELoss()
 
 params = [{'params': model.parameters()}]
 
