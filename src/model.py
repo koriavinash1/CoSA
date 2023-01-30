@@ -290,7 +290,7 @@ class SlotAttention(nn.Module):
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
         if self.quantize:
-            if self.restart_cbstats and (epoch % 2 == 1) and (batch == 0) and (epoch < 25): 
+            if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
                 self.slot_quantizer.entire_cb_restart()
 
 
@@ -338,10 +338,12 @@ class SlotAttention(nn.Module):
         else:
             mu = self.slots_mu.expand(b, n_s, -1)
             slot_sigma = self.slots_sigma.expand(b, n_s, -1)
-            slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
+            
+            # slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
+            # sigma = torch.exp(0.5*slot_sigma)
 
-            sigma = torch.exp(0.5*slot_sigma)
-            slots = torch.normal(mu, sigma)
+            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
+            slots = torch.normal(mu, slot_sigma)
         
         slots = self.positional_encoder(slots)
         return slots, qloss, perplexity, cbidxs
@@ -598,3 +600,97 @@ class SlotAttentionAutoEncoder(nn.Module):
         # `recon_combined` has shape: [batch_size, width, height, num_channels].
 
         return recon_combined, recons, masks, slots, cbidxs, qloss, perplexity
+
+
+
+
+
+class SlotAttentionClassifier(nn.Module):
+  """Slot Attention-based classifier for property prediction."""
+
+  def __init__(self,  resolution, 
+                        num_slots, 
+                        num_iterations, 
+                        hid_dim, 
+                        max_slots=64, 
+                        nunique_slots=10,
+                        quantize=False,
+                        cosine=False, 
+                        cb_decay=0.99,
+                        encoder_res=4,
+                        decoder_res=4,
+                        variational=False, 
+                        binarize=False,
+                        cb_qk=False,
+                        eigen_quantizer=False,
+                        restart_cbstats=False,
+                        implicit=True,
+                        gumble=False,
+                        temperature=1.0,
+                        kld_scale=1.0
+                        ):
+    """Builds the Slot Attention-based classifier.
+    Args:
+      resolution: Tuple of integers specifying width and height of input image.
+      num_slots: Number of slots in Slot Attention.
+      num_iterations: Number of iterations in Slot Attention.
+    """
+    super().__init__()
+    self.hid_dim = hid_dim
+    self.resolution = resolution
+    self.num_slots = num_slots
+    self.num_iterations = num_iterations
+
+    self.slot_attention = SlotAttention(
+            num_slots=self.num_slots,
+            dim=hid_dim,
+            iters = self.num_iterations,
+            eps = 1e-8, 
+            hidden_dim = 128,
+            nunique_slots=nunique_slots,
+            quantize = quantize,
+            max_slots=max_slots,
+            cosine=cosine,
+            cb_decay=cb_decay,
+            encoder_intial_res=(encoder_res, encoder_res),
+            decoder_intial_res=(decoder_res, decoder_res),
+            cb_variational=variational,
+            cov_binarize=binarize,
+            cb_querykey=cb_qk,
+            eigen_quantizer=eigen_quantizer,
+            restart_cbstats=restart_cbstats,
+            implicit=implicit,
+            gumble=gumble,
+            temperature=temperature,
+            kld_scale=kld_scale)
+
+
+    self.mlp_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(hid_dim, nunique_slots),
+                                        nn.Sigmoid())
+    
+    
+
+  def forward(self, image, num_slots=None, epoch=0, batch=0):
+    # `image` has shape: [batch_size, width, height, num_channels].
+
+    # Convolutional encoder with position embedding.
+    x = self.encoder_cnn(image)  # CNN Backbone.
+    # `x` has shape: [batch_size, input_size, width, height].
+
+
+    
+    # Slot Attention module.
+    slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, 
+                                                                    num_slots, 
+                                                                    epoch, 
+                                                                    batch, 
+                                                                    images=image)
+    # `slots` has shape: [batch_size, num_slots, slot_size].
+    # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
+
+
+    predictions = self.mlp_classifier(slots)
+
+    return predictions, cbidxs, qloss, perplexity

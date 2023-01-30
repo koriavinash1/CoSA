@@ -123,8 +123,8 @@ class BaseVectorQuantizer(nn.Module):
             self.mu_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             self.sigma_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             nn.init.xavier_uniform_(self.mu_embeddings.weight)
-            # nn.init.xavier_uniform_(self.sigma_embeddings.weight)
-            nn.init.constant_(self.sigma_embeddings.weight, 0)
+            nn.init.xavier_uniform_(self.sigma_embeddings.weight)
+            # nn.init.constant_(self.sigma_embeddings.weight, 0)
 
         self.data_mean = 0
         self.data_std = 0
@@ -243,8 +243,8 @@ class BaseVectorQuantizer(nn.Module):
             slot_mu = slot_mu + quantized.clone()
 
             slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
-            slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
-            slot_sigma = torch.exp(0.5*slot_sigma)
+            # slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
+            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
             slots = torch.normal(slot_mu, slot_sigma).view(input_shape)
 
         return quantized.view(input_shape), encoding_indices, encodings, slots, None
@@ -282,8 +282,8 @@ class BaseVectorQuantizer(nn.Module):
             slot_mu = slot_mu + quantized.clone().view(-1, self._embedding_dim)
 
             slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
-            slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
-            slot_sigma = torch.exp(0.5*slot_sigma)
+            # slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
+            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
             slots = torch.normal(slot_mu, slot_sigma).view(input_shape)
        
         return quantized, encoding_indices, encodings, slots, logits

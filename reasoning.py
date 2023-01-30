@@ -61,7 +61,7 @@ parser.add_argument('--cb_qk', type=str2bool, default=False)
 parser.add_argument('--eigen_quantizer', type=str2bool, default=False)
 parser.add_argument('--restart_cbstats', type=str2bool, default=False)
 
-parser.add_argument('--implicit', type=str2bool, default=False)
+parser.add_argument('--implicit', type=str2bool, default=True)
 parser.add_argument('--gumble', type=str2bool, default=False)
 parser.add_argument('--temperature', type=float, default=1.0)
 parser.add_argument('--kld_scale', type=float, default=1.0)
@@ -78,16 +78,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
 arg_str = '__'.join(arg_str_list)
-
-
- # save all parameters in the exp directory
-json.dump(vars(opt), 
-        open(os.path.join(opt.model_dir, 'exp-parameters.json'), 'w'), 
-        indent=4)
-print ('Parameters saved in: ', os.path.join(opt.model_dir, 'exp-parameters.json'))
-
 log_dir = os.path.join(opt.model_dir, datetime.today().isoformat())
-
 
 os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir)
