@@ -612,7 +612,7 @@ class SlotAttentionClassifier(nn.Module):
                         num_slots, 
                         num_iterations, 
                         hid_dim, 
-                        nclasses,
+                        nproperties,
                         max_slots=64, 
                         nunique_slots=10,
                         quantize=False,
@@ -646,7 +646,7 @@ class SlotAttentionClassifier(nn.Module):
 
     # nclasses: numpber of nodes as outputs
     # In case of CLEVR: (coords=3) + (color=8) + (size=2) + (material=2) + (shape=3) + (real=1) = 19
-    self.nclasses = nclasses
+    self.nproperties = nproperties
 
     self.encoder_cnn = Encoder(self.resolution, self.hid_dim)
     self.slot_attention = SlotAttention(
@@ -675,7 +675,7 @@ class SlotAttentionClassifier(nn.Module):
 
     self.mlp_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, self.nclasses),
+                                        nn.Linear(hid_dim, self.nproperties),
                                         nn.Sigmoid())
     
     
@@ -702,3 +702,156 @@ class SlotAttentionClassifier(nn.Module):
     predictions = self.mlp_classifier(slots)
 
     return predictions, cbidxs, qloss, perplexity
+
+
+
+
+
+class ReasoningAttention(nn.Module):
+    def __init__(self, nconcepts, cdim):
+        super().__init__()
+
+        self.nconcepts = nconcepts
+        self.edim = cdim
+
+        self.attention_layer = nn.Parameter(nn.init.xavier_uniform_(torch.empty(self.nconcepts, self.edim)))
+
+
+    def forward(self, cb, sampled_idx):
+        #z_q: sampled K eign vectors
+        cb = cb.unsqueeze(0).repeat(sampled_idx.shape[0], 1, 1)
+        mask = torch.zeros_like(cb)
+
+        for i, idx in enumerate(sampled_idx):
+            for __idx__ in idx:
+                mask[i, int(__idx__), :] = 1
+
+        sampled_cb = cb*mask
+        attention_vector = torch.sum(sampled_cb*self.attention_layer.weight.unsqueeze(0), 2)
+        return attention_vector
+
+
+
+class SlotAttentionReasoning(nn.Module):
+    def __init__(self, resolution, 
+                        num_slots, 
+                        num_iterations, 
+                        hid_dim,
+                        nproperties, 
+                        nclasses,
+                        max_slots=64, 
+                        nunique_slots=10,
+                        quantize=False,
+                        cosine=False, 
+                        cb_decay=0.99,
+                        encoder_res=4,
+                        decoder_res=4,
+                        variational=False, 
+                        binarize=False,
+                        cb_qk=False,
+                        eigen_quantizer=False,
+                        restart_cbstats=False,
+                        implicit=True,
+                        gumble=False,
+                        temperature=1.0,
+                        kld_scale=1.0
+                        ):
+        """Builds the Slot Attention-based auto-encoder.
+        Args:
+        resolution: Tuple of integers specifying width and height of input image.
+        num_slots: Number of slots in Slot Attention.
+        num_iterations: Number of iterations in Slot Attention.
+        """
+        super().__init__()
+        self.hid_dim = hid_dim
+        self.resolution = resolution
+        self.num_slots = num_slots
+        self.num_iterations = num_iterations
+
+        # nclasses: numpber of nodes as outputs
+        # In case of CLEVR: (coords=3) + (color=8) + (size=2) + (material=2) + (shape=3) + (real=1) = 19
+        self.nclasses = nclasses
+        self.nproperties = nproperties
+        
+        self.encoder_cnn = Encoder(self.resolution, self.hid_dim)
+        self.decoder_cnn = Decoder(self.hid_dim, self.resolution)
+
+
+        self.slot_attention = SlotAttention(
+            num_slots=self.num_slots,
+            dim=hid_dim,
+            iters = self.num_iterations,
+            eps = 1e-8, 
+            hidden_dim = 128,
+            nunique_slots=nunique_slots,
+            quantize = quantize,
+            max_slots=max_slots,
+            cosine=cosine,
+            cb_decay=cb_decay,
+            encoder_intial_res=(encoder_res, encoder_res),
+            decoder_intial_res=(decoder_res, decoder_res),
+            cb_variational=variational,
+            cov_binarize=binarize,
+            cb_querykey=cb_qk,
+            eigen_quantizer=eigen_quantizer,
+            restart_cbstats=restart_cbstats,
+            implicit=implicit,
+            gumble=gumble,
+            temperature=temperature,
+            kld_scale=kld_scale)
+
+        
+        self.property_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(hid_dim, self.nproperties),
+                                        nn.Sigmoid())
+
+
+
+        self.reasoning_attention = ReasoningAttention(max_slots, hid_dim)
+        self.reasoning_classifier = nn.Sequential(nn.Linear(max_slots, hid_dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(hid_dim, self.nclasses),
+                                        nn.Softmax())
+
+
+    def forward(self, image, num_slots=None, epoch=0, batch=0):
+        # `image` has shape: [batch_size, num_channels, width, height].
+
+        # Convolutional encoder with position embedding.
+        x = self.encoder_cnn(image)  # CNN Backbone.
+        # `x` has shape: [batch_size, input_size, width, height].
+
+        # Slot Attention module.
+        slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, 
+                                                                        num_slots, 
+                                                                        epoch, 
+                                                                        batch, 
+                                                                        images=image)
+        # `slots` has shape: [batch_size, num_slots, slot_size].
+        # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
+
+        x = self.decoder_cnn(features)
+        x = x.permute(0, 2, 3, 1)
+        # `x` has shape: [batch_size*num_slots, width, height, num_channels+1].
+
+        # Undo combination of slot and batch dimension; split alpha masks.
+        recons, masks = x.reshape(image.shape[0], -1, x.shape[1], x.shape[2], x.shape[3]).split([3,1], dim=-1)
+        # `recons` has shape: [batch_size, num_slots, width, height, num_channels].
+        # `masks` has shape: [batch_size, num_slots, width, height, 1].
+
+        # Normalize alpha masks over slots.
+        masks = nn.Softmax(dim=1)(masks)
+        recon_combined = torch.sum(recons * masks, dim=1)  # Recombine image.
+        recon_combined = recon_combined.permute(0,3,1,2)
+        # `recon_combined` has shape: [batch_size, width, height, num_channels].
+
+
+        predictions = self.mlp_classifier(slots)
+        res_cb_samples = self.reasoning_attention(self.slot_attention.slot_quantizer._embedding.weight,
+                                                        cbidxs)
+        logits = self.reasoning_classifier(res_cb_samples)
+
+
+        return recon_combined, predictions, logits, recons, masks, slots, cbidxs, qloss, perplexity
+

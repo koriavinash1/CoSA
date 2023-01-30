@@ -57,6 +57,7 @@ model = SlotAttentionClassifier(resolution,
                                     exp_arguments['num_slots'], 
                                     exp_arguments['num_iterations'], 
                                     exp_arguments['hid_dim'],
+                                    19, #nproperties...
                                     exp_arguments['max_slots'],
                                     exp_arguments['nunique_objects'],
                                     exp_arguments['quantize'],
@@ -139,23 +140,27 @@ def hungarian_huber_loss(x, y):
 
 def training_step(model, optimizer, epoch, opt):
     idxs = []
-    total_loss = 0
+    total_loss = 0; property_loss = 0; qloss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
-        labels = sample['labels'].to(device)
+        labels = sample['properties'].to(device)
 
-        predictions, cbidxs, qloss, perplexity = model(image, 
+        predictions, cbidxs, qerror, perplexity = model(image, 
                                                         epoch=epoch, 
                                                         batch=ibatch)
-        prediction_loss = hungarian_huber_loss(predictions, labels)
+        property_error = hungarian_huber_loss(predictions, labels)
 
-        total_loss += prediction_loss.item()
+        loss = property_error + qerror
+
+        property_loss += property_error.item()
+        qloss += qerror.item()
+
 
 
 
         optimizer.zero_grad()
-        prediction_loss.backward()
+        loss.backward()
         clip_grad_norm_(model.parameters(), 10.0, 'inf')
         optimizer.step()
 
@@ -163,7 +168,9 @@ def training_step(model, optimizer, epoch, opt):
 
         with torch.no_grad():
             if ibatch % opt.log_interval == 0:            
-                writer.add_scalar('TRAIN/loss', prediction_loss.item(), global_step)
+                writer.add_scalar('TRAIN/loss', loss.item(), global_step)
+                writer.add_scalar('TRAIN/property_loss', property_error.item(), global_step)
+                writer.add_scalar('TRAIN/quant_loss', qerror.item(), global_step)
                 writer.add_scalar('TRAIN/perplexity', perplexity.item(), global_step)
                 writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
                 writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
@@ -172,6 +179,8 @@ def training_step(model, optimizer, epoch, opt):
 
     idxs = torch.cat(idxs, 0)
     return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
+                        'property_loss': property_loss*1.0/train_epoch_size,
+                        'qloss': qloss*1.0/train_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
 
     return return_stats
@@ -180,23 +189,28 @@ def training_step(model, optimizer, epoch, opt):
 @torch.no_grad()
 def validation_step(model, optimizer, epoch, opt):
     idxs = []
-    total_loss = 0
+    total_loss = 0; qloss = 0; property_loss = 0;
     for ibatch, sample in tqdm(enumerate(val_dataloader)):
         global_step = epoch * val_epoch_size + ibatch
         image = sample['image'].to(device)
-        labels = sample['labels'].to(device)
+        labels = sample['properties'].to(device)
 
-        predictions, cbidxs, qloss, perplexity = model(image, 
+        predictions, cbidxs, qerror, perplexity = model(image, 
                                                         epoch=epoch, 
                                                         batch=ibatch)
-        prediction_loss = hungarian_huber_loss(predictions, labels)
+        property_error = hungarian_huber_loss(predictions, labels)
 
-        total_loss += prediction_loss.item()
+        loss = property_error + qerror
+
+        property_loss += property_error.item()
+        qloss += qerror.item()
 
         idxs.append(cbidxs)
 
         if ibatch % opt.log_interval == 0:            
-            writer.add_scalar('VALID/loss', prediction_loss.item(), global_step)
+            writer.add_scalar('VALID/loss', loss.item(), global_step)
+            writer.add_scalar('VALID/quant_loss', qerror.item(), global_step)
+            writer.add_scalar('VALID/property_loss', property_error.item(), global_step)
             writer.add_scalar('VALID/perplexity', perplexity.item(), global_step)
             writer.add_scalar('VALID/quant', qloss.item(), global_step)
             writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
@@ -205,6 +219,8 @@ def validation_step(model, optimizer, epoch, opt):
 
     idxs = torch.cat(idxs, 0)
     return_stats = {'total_loss': total_loss*1.0/val_epoch_size,
+                        'qloss': qloss*1.0/val_epoch_size,
+                        'property_loss': property_loss*1.0/val_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
     return return_stats
 

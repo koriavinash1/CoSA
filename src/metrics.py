@@ -5,7 +5,7 @@ import torchvision
 from shutil import rmtree
 from tqdm import tqdm
 from pytorch_fid import fid_score
-
+from sklearn.metrics import accuracy_score
 
 
 @torch.no_grad()
@@ -221,3 +221,27 @@ def compute_average_precision(precision, recall):
     for i in indices_recall:
         average_precision += precision[i + 1] * (recall[i + 1] - recall[i])
     return average_precision
+
+
+@torch.no_grad()
+def accuracy(loader, model, num_batches):
+    model.eval()
+
+    labels = []; predictions = []
+    for batch_num in tqdm(range(num_batches), desc='calculating FID - saving generated'):
+        samples = next(loader)
+
+        image = samples['image'].to(model.device)
+        labels = samples['label'].to(model.device)
+
+        _, _, logits, *_ = model(image, 
+                                epoch=0, 
+                                batch=batch_num)
+
+        predictions.append(torch.argmax(logits, 1))
+        labels.append(labels)
+
+    predictions = torch.cat(predictions, 0).cpu().numpy()
+    labels = torch.cat(labels, 0).cpu().numpy()
+
+    return accuracy_score(labels, predictions)

@@ -351,14 +351,14 @@ for epoch in range(opt.num_epochs):
             'epoch': epoch,
             'vstats': validation_stats,
             'tstats': training_stats, 
-            }, os.path.join(opt.model_dir, f'best.pth'))
+            }, os.path.join(opt.model_dir, f'discovery_best.pth'))
 
     torch.save({
         'model_state_dict': model.state_dict(),
         'epoch': epoch,
         'vstats': validation_stats,
         'tstats': training_stats, 
-        }, os.path.join(opt.model_dir, f'last.pth'))
+        }, os.path.join(opt.model_dir, f'discovery_last.pth'))
 
     if epoch > 5:
         opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)
