@@ -83,6 +83,7 @@ arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
 arg_str = '__'.join(arg_str_list)
 
 
+os.makedirs(opt.model_dir, exist_ok=True)
  # save all parameters in the exp directory
 json.dump(vars(opt), 
         open(os.path.join(opt.model_dir, 'exp-parameters.json'), 'w'), 

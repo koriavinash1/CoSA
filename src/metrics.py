@@ -15,15 +15,17 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
     real_path = os.path.join(fid_dir, 'real')
     fake_path = os.path.join(fid_dir, 'fake')
 
+    os.makedirs(real_path, exist_ok=True)
+    os.makedirs(fake_path, exist_ok=True)
     # remove any existing files used for fid calculation and recreate directories
 
-    if not os.path.exists(real_path):
+    if os.listdir(real_path) < 10 :
         rmtree(real_path, ignore_errors=True)
         os.makedirs(real_path)
 
         for batch_num in tqdm(range(num_batches), desc='calculating FID - saving reals'):
             samples = next(iter(loader))
-            real_batch = samples['images']
+            real_batch = samples['image']
             for k, image in enumerate(real_batch.cpu()):
                 filename = str(k + batch_num * batch_size)
                 torchvision.utils.save_image(image, os.path.join(real_path, f'{filename}.png'))
@@ -46,7 +48,11 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
         for j, image in enumerate(recon_combined.cpu()):
             torchvision.utils.save_image(image, os.path.join(fake_path, f'{str(j + batch_num * batch_size)}.png'))
 
-    return fid_score.calculate_fid_given_paths([str(real_path), str(fake_path)], 256, model.device, 2048)
+    return fid_score.calculate_fid_given_paths(paths = [str(real_path), str(fake_path)], 
+                                                dims = 2048, 
+                                                device=0,
+                                                batch_size= 256, 
+                                                num_workers = 8)
 
 
 
