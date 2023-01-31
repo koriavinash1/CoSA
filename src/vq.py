@@ -73,11 +73,11 @@ def get_cosine_distance(u, v):
     ed2 = torch.sqrt(torch.sum(v**2, dim=1, keepdim=True))
     ed3 = torch.einsum('bd,dn->bn', ed1, rearrange(ed2, 'n d  -> d n'))
     geod = torch.clamp(d/(ed3), min=-0.99999, max=0.99999)
-    return 2.0*torch.acos(torch.abs(geod))/np.pi
+    return torch.acos(torch.abs(geod))/(2.0*np.pi)
 
 
 def get_cb_variance(cb):
-    # cb = cb / torch.norm(cb, dim=1, keepdim=True)
+    cb = cb / torch.norm(cb, dim=1, keepdim=True)
     cd = get_cosine_distance(cb, cb)
     return 1 - torch.mean(torch.var(cd, 1)) 
 
@@ -123,8 +123,8 @@ class BaseVectorQuantizer(nn.Module):
             self.mu_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             self.sigma_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             nn.init.xavier_uniform_(self.mu_embeddings.weight)
-            # nn.init.xavier_uniform_(self.sigma_embeddings.weight)
-            nn.init.constant_(self.sigma_embeddings.weight, 0)
+            nn.init.xavier_uniform_(self.sigma_embeddings.weight)
+            # nn.init.constant_(self.sigma_embeddings.weight, 0)
 
         self.data_mean = 0
         self.data_std = 0
@@ -287,8 +287,13 @@ class BaseVectorQuantizer(nn.Module):
 
             slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
             # slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
-            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
-            slots = torch.normal(slot_mu, slot_sigma).view(input_shape)
+            # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
+            slots = torch.normal(slot_mu, slot_sigma)
+
+            slots = torch.clamp(slots, 
+                                min=(slot_mu - 2*slot_sigma).clone().detach(), 
+                                max=(slot_mu + 2*slot_sigma).clone().detach())
+            slots = slots.view(input_shape)
        
         return quantized, encoding_indices, encodings, slots, logits
 
@@ -408,21 +413,25 @@ class VectorQuantizer(BaseVectorQuantizer):
         # Loss
         loss = self.compute_baseloss(quantized, inputs, logits, avg, loss_type)
 
-        # qk loss
-        qkloss = 0
-        if self.qk and (not final):
-            qkloss += get_cb_variance(self.mu_embeddings.weight)
-            qkloss += 0.01*torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
-        #     slot_mu = self.mu_embeddings.weight
-        #     slot_logvar = self.sigma_embeddings.weight
+
+        if not (loss_type == 2):
+            # qk loss
+            qkloss = 0
+            if self.qk and (not final):
+                qkloss += get_cb_variance(self.mu_embeddings.weight)
+                qkloss += 0.01*torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
+            #     slot_mu = self.mu_embeddings.weight
+            #     slot_logvar = self.sigma_embeddings.weight
 
 
-        loss += get_cb_variance(self._embedding.weight)
+            loss += get_cb_variance(self._embedding.weight)
+            loss += qkloss
+
+
         loss += klloss
-        loss += qkloss
 
         # Straight Through Estimator
-        quantized = inputs + (quantized - inputs).detach()
+        if not self.gumble: quantized = inputs + (quantized - inputs).detach()
         avg_probs = torch.mean(encodings, dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         encoding_indices = encoding_indices.view(input_shape[0], -1)
@@ -533,22 +542,24 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
 
         loss = self.compute_baseloss(quantized, inputs, logits, avg, loss_type)
 
-        # qk loss
-        qkloss = 0
-        if self.qk and (not final):
-            qkloss += get_cb_variance(self.mu_embeddings.weight)
-            qkloss += 0.01*torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
-        #     slot_mu = self.mu_embeddings.weight
-        #     slot_logvar = self.sigma_embeddings.weight
+        if not (loss_type == 2):
+            # qk loss
+            qkloss = 0
+            if self.qk and (not final):
+                qkloss += get_cb_variance(self.mu_embeddings.weight)
+                qkloss += 0.01*torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
+            #     slot_mu = self.mu_embeddings.weight
+            #     slot_logvar = self.sigma_embeddings.weight
 
 
-        loss += get_cb_variance(self._embedding.weight)
+            loss += get_cb_variance(self._embedding.weight)
+            
+            loss += qkloss
+
         loss += klloss
-        loss += qkloss
-
 
         # Straight Through Estimator
-        quantized = inputs + (quantized - inputs).detach()
+        if not self.gumble: quantized = inputs + (quantized - inputs).detach()
         avg_probs = torch.mean(encodings, dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         

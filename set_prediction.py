@@ -23,7 +23,7 @@ def str2bool(v):
     return v.lower() in ('true', '1')
 
 
-parser.add_argument('--batch_size', default=32, type=int)
+parser.add_argument('--batch_size', default=16, type=int)
 parser.add_argument('--learning_rate', default=0.0004, type=float)
 parser.add_argument('--config', type=str)
 
@@ -34,7 +34,7 @@ opt = parser.parse_args()
 
 
 # load parameters....
-exp_arguments = json.load(opt.config)
+exp_arguments = json.load(open(opt.config, 'r'))
 print(exp_arguments)
 print ('='*25)
 
@@ -42,7 +42,7 @@ print ('='*25)
 
 resolution = (exp_arguments['img_size'], exp_arguments['img_size'])
 opt.model_dir = exp_arguments['model_dir']
-
+opt.overlap_weightage = exp_arguments['overlap_weightage']
 
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
 arg_str = '__'.join(arg_str_list)
@@ -76,20 +76,37 @@ model = SlotAttentionClassifier(resolution,
                                     exp_arguments['kld_scale']).to(device)
 
 ckpt=torch.load(os.path.join(opt.model_dir, 'discovery_best.pth' ))
-model.encoder_cnn.load_state_dict(ckpt['encoder_cnn'])
-model.slot_attention.load_state_dict(ckpt['slot_attention'])
+keys = ckpt['model_state_dict'].keys()
 
+model.encoder_cnn.load_state_dict({k[12:]: ckpt['model_state_dict'][k] for k in keys if k.__contains__('encoder_cnn')})
+model.slot_attention.load_state_dict({k[15:]: ckpt['model_state_dict'][k] for k in keys if k.__contains__('slot_attention')})
+model.device = device
 params = [{'params': model.parameters()}]
 
-train_set = DataGenerator(root=opt.data_root, mode='train', resolution=resolution)
+train_set = DataGenerator(root=exp_arguments['data_root'], 
+                                mode='train',
+                                max_objects = 10,
+                                properties=True,
+                                class_info=False, 
+                                resolution=resolution)
 train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers)
 
-val_set = DataGenerator(root=opt.data_root, mode='val',  resolution=resolution)
+val_set = DataGenerator(root=exp_arguments['data_root'], 
+                            mode='val',  
+                            max_objects = 10,
+                            properties=True,
+                            class_info=False,
+                            resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers)
 
-test_set = DataGenerator(root=opt.data_root, mode='test',  resolution=resolution)
+test_set = DataGenerator(root=exp_arguments['data_root'], 
+                                mode='test',  
+                                max_objects = 10,
+                                properties=True,
+                                class_info=False,
+                                resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers)
 
@@ -97,6 +114,7 @@ test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_siz
 train_epoch_size = len(train_dataloader)
 val_epoch_size = len(val_dataloader)
 
+opt.exp_name = exp_arguments['exp_name']
 opt.log_interval = train_epoch_size // 5
 optimizer = optim.Adam(params, lr=opt.learning_rate)
 lrscheduler = ReduceLROnPlateau(optimizer, 'min')
@@ -125,15 +143,20 @@ def hungarian_huber_loss(x, y):
     """
 
     # adjust shape for x and y
-    # x = ...
-    # y = ...
+    x = x.unsqueeze(-3)
+    y = y.unsqueeze(-2)
 
 
     pairwise_cost = F.huber_loss(x, y, reduction='none')
-    indices = np.array(list(map(linear_sum_assignment, pairwise_cost.detach().numpy())))
-    transposed_indices = np.transpose(indices, axes=(0, 2, 1))
-    actual_costs = torch.gather(pairwise_cost, dim = 1, indices = transposed_indices)
+    pairwise_cost = pairwise_cost.mean(-1)
 
+    indices = np.array(list(map(linear_sum_assignment, pairwise_cost.clone().detach().cpu().numpy())))
+    transposed_indices = np.transpose(indices, axes=(0, 2, 1))
+
+    transposed_indices = torch.tensor(transposed_indices).to(x.device)
+
+    actual_costs = torch.gather(pairwise_cost, dim = 1, index = transposed_indices)
+    
     return actual_costs.sum(1).mean()
 
 
@@ -153,6 +176,7 @@ def training_step(model, optimizer, epoch, opt):
 
         loss = property_error + qerror
 
+        total_loss += loss.item()
         property_loss += property_error.item()
         qloss += qerror.item()
 
@@ -172,7 +196,6 @@ def training_step(model, optimizer, epoch, opt):
                 writer.add_scalar('TRAIN/property_loss', property_error.item(), global_step)
                 writer.add_scalar('TRAIN/quant_loss', qerror.item(), global_step)
                 writer.add_scalar('TRAIN/perplexity', perplexity.item(), global_step)
-                writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
                 writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
                 writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
 
@@ -202,6 +225,7 @@ def validation_step(model, optimizer, epoch, opt):
 
         loss = property_error + qerror
 
+        total_loss += loss.item()
         property_loss += property_error.item()
         qloss += qerror.item()
 
@@ -212,7 +236,6 @@ def validation_step(model, optimizer, epoch, opt):
             writer.add_scalar('VALID/quant_loss', qerror.item(), global_step)
             writer.add_scalar('VALID/property_loss', property_error.item(), global_step)
             writer.add_scalar('VALID/perplexity', perplexity.item(), global_step)
-            writer.add_scalar('VALID/quant', qloss.item(), global_step)
             writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
             writer.add_scalar('VALID/lr', optimizer.param_groups[0]['lr'], global_step)
 
@@ -248,10 +271,10 @@ for epoch in range(opt.num_epochs):
                                                         ))
     print ('='*50)
 
-    lrscheduler.step(validation_stats['recon_loss'])
+    lrscheduler.step(validation_stats['property_loss'])
 
-    if min_recon_loss > validation_stats['recon_loss']:
-        min_recon_loss = validation_stats['recon_loss']
+    if min_recon_loss > validation_stats['property_loss']:
+        min_recon_loss = validation_stats['property_loss']
         torch.save({
             'model_state_dict': model.state_dict(),
             'epoch': epoch,
@@ -276,9 +299,28 @@ for epoch in range(opt.num_epochs):
     with torch.no_grad():
         every_nepoch = 10
         if not epoch  % every_nepoch:
+            model.eval()
+
+            pred = []; attributes = []
+            for batch_num in tqdm(range(25), desc='calculating APR '):
+                samples = next(iter(test_dataloader))
+
+                image = samples['image'].to(model.device)
+                properties = samples['properties'].to(model.device)
+
+                predictions, *_ = model(image, 
+                                        epoch=0, 
+                                        batch=batch_num)
+
+                attributes.append(properties)
+                pred.append(predictions)
+
+            attributes = torch.cat(attributes, 0).cpu().numpy()
+            pred = torch.cat(pred, 0).cpu().numpy()
+
             # For evaluating the AP score, we get a batch from the validation dataset.
             ap = [
-                average_precision_clevr(test_dataloader, model, 25, d)
+                average_precision_clevr(pred, attributes, d)
                 for d in [-1., 1., 0.5, 0.25, 0.125]
             ]
             print(

@@ -20,7 +20,7 @@ def get_paths_with_properties_CLEVR(root_path, mode, max_objects=7):
     shape_mapping ={'sphere': 0, 'cube': 1, 'cylinder':2}
     color_mapping = {'red':0, 'green': 1, 'blue': 2, 'yellow': 3, 'gray': 4, 'cyan': 5, 'brown': 6, 'purple': 7}
     material_mapping = {'rubber': 0, 'metal': 1}
-    data = json.load(open(os.path.join(root_path, mode, f'CLEVR_HANS_scenes_{mode}.json', 'r')))['scenes']
+    data = json.load(open(os.path.join(root_path, mode, f'CLEVR_HANS_scenes_{mode}.json'), 'r'))['scenes']
     paths = []; properties = []
     for data_info in data:
         paths.append(os.path.join(root_path, mode, 'images', data_info['image_filename']))
@@ -28,20 +28,20 @@ def get_paths_with_properties_CLEVR(root_path, mode, max_objects=7):
         objects = []
         for object_info in data_info['objects']:
             object_property = np.eye(len(size_mapping))[size_mapping[object_info['size']]]
-            object_property = np.concatenate(object_property, 
-                            np.eye(len(shape_mapping))[shape_mapping[object_info['shape']]])
-            object_property = np.concatenate(object_property, 
-                            np.eye(len(color_mapping))[color_mapping[object_info['color']]])
-            object_property = np.concatenate(object_property, 
-                            np.eye(len(material_mapping))[material_mapping[object_info['material']]])
-            object_property = np.concatenate(object_property, [1])
-            object_property = np.concatenate(object_property, object_info['3d_coords'])
+            object_property = np.concatenate([object_property, 
+                            np.eye(len(shape_mapping))[shape_mapping[object_info['shape']]]])
+            object_property = np.concatenate([object_property, 
+                            np.eye(len(color_mapping))[color_mapping[object_info['color']]]])
+            object_property = np.concatenate([object_property, 
+                            np.eye(len(material_mapping))[material_mapping[object_info['material']]]])
+            object_property = np.concatenate([object_property, [1]])
+            object_property = np.concatenate([object_property, object_info['3d_coords']])
             objects.append(object_property)
 
         for _ in range(max_objects - len(objects)):
             objects.append(np.zeros_like(object_property))
 
-        properties.append(np.array(objects))
+        properties.append(np.array(objects, dtype='float32'))
     
     return paths, properties
 
@@ -54,7 +54,8 @@ class DataGenerator(Dataset):
     def __init__(self, root, 
                         mode='train',
                         max_objects=10,
-                        mode_type='discovery',
+                        properties=False,
+                        class_info=False,
                         resolution=(128, 128)):
         super(DataGenerator, self).__init__()
         
@@ -62,9 +63,10 @@ class DataGenerator(Dataset):
         self.mode = mode
         self.root_dir = root     
         self.resolution = resolution
-        self.mode_type = mode_type
+        self.properties = properties
+        self.class_info = class_info
 
-        if self.mode_type in ['setprediction', 'reasoning']:
+        if self.properties:
             self.files, self.properties = get_paths_with_properties_CLEVR(root, mode, max_objects)
         else:
             self.files = os.listdir(os.path.join(self.root_dir, self.mode, 'images'))
@@ -86,18 +88,16 @@ class DataGenerator(Dataset):
         path = self.files[index]
         image = Image.open(os.path.join(self.root_dir, self.mode, 'images', path)).convert("RGB")
         image = self.img_transform(image)
+        sample = {'image': image}
 
-        if self.mode_type == 'reasoning':
+        if self.properties:
+            property_info = self.properties[index]
+            property_info = torch.from_numpy(property_info)
+            sample['properties'] = property_info
+
+        if self.class_info:
             target = int(path.split('_')[2])
-            property_info = self.properties[index]
-            property_info = torch.from_numpy(property_info)
-            sample = {'image': image, 'target': target, 'properties': property_info}
-        elif self.mode_type == 'setprediction':
-            property_info = self.properties[index]
-            property_info = torch.from_numpy(property_info)
-            sample = {'image': image, 'properties': property_info}
-        else:
-            sample = {'image': image}
+            sample['target'] = target   
 
         return sample
             

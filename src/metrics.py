@@ -19,7 +19,7 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
     os.makedirs(fake_path, exist_ok=True)
     # remove any existing files used for fid calculation and recreate directories
 
-    if os.listdir(real_path) < 10 :
+    if len(os.listdir(real_path)) < 10 :
         rmtree(real_path, ignore_errors=True)
         os.makedirs(real_path)
 
@@ -60,7 +60,7 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
 
 # set prediction evaluation metrics
 @torch.no_grad()
-def average_precision_clevr(loader, model, num_batches, distance_threshold):
+def average_precision_clevr(pred, attributes, distance_threshold):
     """
     Base Code from: https://github.com/google-research/google-research/blob/c3bef5045a2d4777a80a1fb333d31e03474222fb/slot_attention/utils.py#L60
 
@@ -82,26 +82,6 @@ def average_precision_clevr(loader, model, num_batches, distance_threshold):
     Returns:
     Average precision of the predictions.
     """
-
-    model.eval()
-
-    pred = []; attributes = []
-    for batch_num in tqdm(range(num_batches), desc='calculating FID - saving generated'):
-        samples = next(iter(loader))
-
-        image = samples['image'].to(model.device)
-        properties = samples['properties'].to(model.device)
-
-        predictions, *_ = model(image, 
-                                epoch=0, 
-                                batch=batch_num)
-
-        attributes.append(properties)
-        pred.append(predictions)
-
-    attributes = torch.cat(attributes, 0).cpu().numpy()
-    pred = torch.cat(pred, 0).cpu().numpy()
-
     # =============================================
 
     [batch_size, _, element_size] = attributes.shape
