@@ -238,9 +238,12 @@ def training_step(model, optimizer, epoch, opt):
         quant_loss += qloss.item()
         overlap_loss += overlap_loss_.item()
 
+        # print (model.slot_attention.slot_quantizer.mu_embeddings.weight, '====')
 
         optimizer.zero_grad()
         loss.backward()
+        # print (model.slot_attention.slot_quantizer.mu_embeddings.weight.grad, 'GRAD  ====')
+
         clip_grad_norm_(model.parameters(), 10.0, 'inf')
         optimizer.step()
 
@@ -255,6 +258,7 @@ def training_step(model, optimizer, epoch, opt):
                 writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
                 writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
                 writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
+        
 
     with torch.no_grad():
         attns = recons * masks + (1 - masks)

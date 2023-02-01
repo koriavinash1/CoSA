@@ -123,8 +123,8 @@ class BaseVectorQuantizer(nn.Module):
             self.mu_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             self.sigma_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
             nn.init.xavier_uniform_(self.mu_embeddings.weight)
-            nn.init.xavier_uniform_(self.sigma_embeddings.weight)
-            # nn.init.constant_(self.sigma_embeddings.weight, 0)
+            # nn.init.xavier_uniform_(self.sigma_embeddings.weight)
+            nn.init.constant_(self.sigma_embeddings.weight, 0)
 
         self.data_mean = 0
         self.data_std = 0
@@ -134,10 +134,10 @@ class BaseVectorQuantizer(nn.Module):
         if self.variational:
             self.mean = nn.Sequential(nn.Linear(embedding_dim, embedding_dim),
                                                     nn.ReLU(inplace=True),
-                                                    nn.Linear(embedding_dim, 1))
+                                                    nn.Linear(embedding_dim, embedding_dim))
             self.logvar = nn.Sequential(nn.Linear(embedding_dim, embedding_dim),
                                                     nn.ReLU(inplace=True),
-                                                    nn.Linear(embedding_dim, 1))
+                                                    nn.Linear(embedding_dim, embedding_dim))
             self.variational_sampler = lambda mu, std: torch.randn_like(std) * std + mu
 
 
@@ -207,6 +207,12 @@ class BaseVectorQuantizer(nn.Module):
         # Calculate distances
         distances = self._get_distance(features, self._embedding.weight)
 
+
+        def _unique_ordering_(encoding_indices):
+            # encoding_indices = encoding_indices.view(input_shape[0], -1)
+            return encoding_indices
+
+
         def _min_encoding_(distances):
             # encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
             sampled_dist, encoding_indices = torch.min(distances, dim=1)
@@ -240,17 +246,18 @@ class BaseVectorQuantizer(nn.Module):
         # slot sampling
         if self.qk and (not final):
             slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
-            slot_mu = slot_mu + quantized.clone()
+            slot_mu = slot_mu + quantized.clone().view(-1, self._embedding_dim)
 
             slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
-            # slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
-            # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
-            slots = torch.normal(slot_mu, slot_sigma)
 
-            slots = torch.clamp(slots, 
-                                min=(slot_mu - 2*slot_sigma).clone().detach(), 
-                                max=(slot_mu + 2*slot_sigma).clone().detach())
+            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
+            # slots = torch.normal(slot_mu, slot_sigma)
+
+            slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
+                                                    device = slot_sigma.device, 
+                                                    dtype = slot_sigma.dtype)
             slots = slots.view(input_shape)
+
         return quantized.view(input_shape), encoding_indices, encodings, slots, None
 
 
@@ -286,13 +293,13 @@ class BaseVectorQuantizer(nn.Module):
             slot_mu = slot_mu + quantized.clone().view(-1, self._embedding_dim)
 
             slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
-            # slot_sigma = torch.clamp(slot_sigma, min=-1, max=1)
-            # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
-            slots = torch.normal(slot_mu, slot_sigma)
 
-            slots = torch.clamp(slots, 
-                                min=(slot_mu - 2*slot_sigma).clone().detach(), 
-                                max=(slot_mu + 2*slot_sigma).clone().detach())
+            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
+            # slots = torch.normal(slot_mu, slot_sigma)
+
+            slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
+                                                    device = slot_sigma.device, 
+                                                    dtype = slot_sigma.dtype)
             slots = slots.view(input_shape)
        
         return quantized, encoding_indices, encodings, slots, logits
@@ -510,12 +517,13 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
         # Variational...
         if self.variational:
             # conti. divergence 
-            mean = self.mean(inputs).squeeze(-1)
-            logvar = self.logvar(inputs).squeeze(-1)
+            mean = self.mean(inputs)#.squeeze(-1)
+            logvar = self.logvar(inputs)#.squeeze(-1)
             klloss += torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
 
             # sample quantized
             sigma = torch.exp(0.5*logvar)
+            # import pdb;pdb.set_trace()
             inputs = self.variational_sampler(inputs, sigma)
 
 
@@ -553,7 +561,6 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
 
 
             loss += get_cb_variance(self._embedding.weight)
-            
             loss += qkloss
 
         loss += klloss

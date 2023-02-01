@@ -146,7 +146,8 @@ class SlotAttention(nn.Module):
         else:         
             self.slots_mu    = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
             self.slots_sigma = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
-
+            self.slots_mu.requires_grad = True
+            self.slots_sigma.requires_grad = True
 
 
 
@@ -305,24 +306,24 @@ class SlotAttention(nn.Module):
                 # context loss
                 qloss += 0.01*F.mse_loss(objects.mean(1), k.mean(1))
 
-                qloss1, _, perplexity, _, _ = self.slot_quantizer(objects, 
+                qloss1, _, perplexity, cbidxs, slots = self.slot_quantizer(objects, 
                                                     avg = False, 
                                                     unique=True,
                                                     nunique=nunique,
-                                                    loss_type = 0,
+                                                    loss_type = 2,
                                                     update = self.restart_cbstats,
                                                     reset_usage = (batch == 0))
 
                 qloss += qloss1 
 
                 # sample objects
-                objects, cbidxs, _, slots, _ = self.slot_quantizer.sample(k, st=True)
+                k_, _, _, _, _ = self.slot_quantizer.sample(k, st=True)
                                                             # ,
                                                             # unique=True,
                                                             # nunique=self.nunique_slots +1)
 
             else:
-                qloss, objects, perplexity, cbidxs, slots = self.slot_quantizer(k, 
+                qloss, k_, perplexity, cbidxs, slots = self.slot_quantizer(k, 
                                                     avg = False, 
                                                     loss_type = 2,
                                                     unique=True,
@@ -336,6 +337,7 @@ class SlotAttention(nn.Module):
             
             cbidxs = cbidxs[:, :n_s]
         else:
+            k_ = k
             mu = self.slots_mu.expand(b, n_s, -1)
             slot_sigma = self.slots_sigma.expand(b, n_s, -1)
             
@@ -343,10 +345,12 @@ class SlotAttention(nn.Module):
             # sigma = torch.exp(0.5*slot_sigma)
 
             slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
-            slots = torch.normal(mu, slot_sigma)
+            slots = mu + slot_sigma * torch.randn(slot_sigma.shape, 
+                                                    device = slot_sigma.device, 
+                                                    dtype = slot_sigma.dtype)
         
         slots = self.positional_encoder(slots)
-        return slots, qloss, perplexity, cbidxs
+        return k_, slots, qloss, perplexity, cbidxs
 
 
     def forward(self, inputs, num_slots = None, epoch=0, batch= 0, train = True, images=None):
@@ -365,7 +369,7 @@ class SlotAttention(nn.Module):
 
 
         # Sample Slots ========================
-        slots, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, epoch, batch, images)
+        k_noposition, slots, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, epoch, batch, images)
         
 
         # Slot attention ===================
