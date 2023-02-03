@@ -16,7 +16,7 @@ BINARIZE=${14}
 NAME=${15}
 ITER=${16}
 
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTestingFeb02'
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTestingNewFormalism'
 python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --exp_name $NAME \
                                             --batch_size 16 \
@@ -24,7 +24,7 @@ python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --img_size $IMSIZE \
                                             --encoder_res $ENCODERRES \
                                             --decoder_res $DECODERRES \
-                                            --learning_rate 0.001 \
+                                            --learning_rate 0.0004 \
                                             --cb_decay $CBDECAY \
                                             --nunique_objects $NCONCEPTS \
                                             --max_slots $((2*$NCONCEPTS + 2)) \
