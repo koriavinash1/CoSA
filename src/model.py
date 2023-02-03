@@ -313,7 +313,7 @@ class SlotAttention(nn.Module):
                 qloss += qloss1 
 
                 # sample objects
-                k_, _, _, _, _ = self.slot_quantizer.sample(k, st=True)
+                k_, _, _, _, _, _, _  = self.slot_quantizer.sample(k, st=True)
                                                             # ,
                                                             # unique=True,
                                                             # nunique=self.nunique_slots +1)
@@ -342,7 +342,6 @@ class SlotAttention(nn.Module):
                                                     device = slot_sigma.device, 
                                                     dtype = slot_sigma.dtype)
         
-        slots = self.positional_encoder(slots)
         return k_, slots, qloss, perplexity, cbidxs
 
 
