@@ -19,6 +19,22 @@ import torch.autograd as autograd
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
+def reorder_slots(slots, slots_mu, cidxs, ns=10):
+    # eigenvalues in decreasing order
+    # cidxs are ordered wrt eigenvalues
+
+    B, N = cidxs.shape
+    if ns > N:
+        orig_slots = slots.clone()
+        orig_slots_mu = slots_mu.clone()
+        orig_idxs = cidxs.clone()
+        for _ in range(int(ns/N) + 1):
+            slots = torch.cat([slots, orig_slots[:, 1:, :]], 1)
+            slots_mu = torch.cat([slots_mu, orig_slots_mu[:, 1:, :]], 1)
+            cidxs = torch.cat([cidxs, orig_idxs[:, 1:]], 1)
+    return slots[:, :ns, :], slots_mu[:, :ns, :], cidxs
+
+
 class SlotAttention(nn.Module):
     def __init__(self, num_slots, 
                         dim, 
@@ -206,7 +222,7 @@ class SlotAttention(nn.Module):
         eigen_values = torch.flip(eigen_values, [1])
 
 
-        return eigen_vectors, self.normalize(eigen_values, 1)
+        return eigen_vectors, eigen_values
 
 
     def extract_eigen_basis(self, features, batch=None):
@@ -286,63 +302,65 @@ class SlotAttention(nn.Module):
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
         if self.quantize:
-            if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
-                self.slot_quantizer.entire_cb_restart()
+            # if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
+            #     self.slot_quantizer.entire_cb_restart()
 
 
             if self.eigen_quantizer:
+                # Compute Principle directions and scale
+
                 eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
                 # eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
-                objects = self.masked_projection(k, eigen_basis)   
 
-                # nunique elements based on 50% quantile or mean of the distribution
-                nunique = torch.sum(eigen_values > eigen_values.mean(1, keepdim=True), 1).detach().cpu().numpy()
-                nunique = np.maximum(nunique, self.min_number_elements)
+                eigen_values = torch.round(eigen_values)
+                nunique_objects = max(3, int((1.0*(eigen_values > 0).sum(1)).mean().item()))
+
+                # Principle components
+                objects = self.masked_projection(k, eigen_basis)   
+                objects = objects[:, :nunique_objects, :]
 
                 # context loss
-                qloss += 0.01*F.mse_loss(objects.mean(1), k.mean(1))
+                # qloss += F.mse_loss(objects.mean(1), k.mean(1))
 
-                qloss1, _, perplexity, cbidxs, slots = self.slot_quantizer(objects, 
-                                                    avg = False, 
-                                                    unique=True,
-                                                    nunique=nunique,
-                                                    loss_type = 0,
-                                                    update = self.restart_cbstats,
-                                                    reset_usage = (batch == 0))
 
+                # Quantizing components----
+                qloss1, _, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(objects, 
+                                                                    loss_type = 0,
+                                                                    update = self.restart_cbstats,
+                                                                    reset_usage = (batch == 0))
                 qloss += qloss1 
 
+
                 # sample objects
-                k_, _, _, _, _, _, _  = self.slot_quantizer.sample(k, st=True)
-                                                            # ,
-                                                            # unique=True,
-                                                            # nunique=self.nunique_slots +1)
+                k_, _, _, _, _, _, _  = self.slot_quantizer.sample(k,
+                                                                idxs=cbidxs, 
+                                                                st=True)
 
             else:
-                qloss, k_, perplexity, cbidxs, slots = self.slot_quantizer(k, 
+                qloss, k_, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(k, 
                                                     avg = False, 
                                                     loss_type = 2,
-                                                    unique=True,
-                                                    nunique=self.nunique_slots +1,
                                                     update = self.restart_cbstats,
                                                     reset_usage = (batch == 0))
             
 
-            if self.cb_querykey: slots = slots[:, :n_s, :]
-            else: slots = objects[:, :n_s, :]
-            
-            cbidxs = cbidxs[:, :n_s]
+            if self.cb_querykey: 
+                slots, slot_mu, cbidxs = reorder_slots(slots, slot_mu, cbidxs, n_s)
+            else: 
+                slots = objects[:, :n_s, :]
+                slot_mu = slots.clone()
+                cbidxs = cbidxs[:, :n_s]
         else:
             k_ = k
-            mu = self.slots_mu.expand(b, n_s, -1)
+            slot_mu = self.slots_mu.expand(b, n_s, -1)
             slot_sigma = self.slots_sigma.expand(b, n_s, -1)
 
             slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
-            slots = mu + slot_sigma * torch.randn(slot_sigma.shape, 
+            slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
                                                     device = slot_sigma.device, 
                                                     dtype = slot_sigma.dtype)
         
-        return k_, slots, qloss, perplexity, cbidxs
+        return k_, slots, slot_mu, qloss, perplexity, cbidxs
 
 
 
@@ -351,8 +369,8 @@ class SlotAttention(nn.Module):
         n_s = num_slots if num_slots is not None else self.num_slots        
 
         # Compute Projections ========================
-        # inputs_features = self.encoder_transformation(inputs, position = True)
-        # inputs_features = self.norm_input(inputs_features)
+        inputs_features = self.encoder_transformation(inputs, position = True)
+        inputs_features = self.norm_input(inputs_features)
 
 
         inputs_features_noposition = self.encoder_transformation(inputs, position = False)
@@ -360,30 +378,23 @@ class SlotAttention(nn.Module):
 
 
         k_noposition =  self.to_k_np(inputs_features_noposition)
-        v = self.to_v(inputs_features_noposition)
+        v = self.to_v(inputs_features)
 
         # Sample Slots ========================
-        k_noposition, slots, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, epoch, batch, images)
+        k_noposition_, slots, slots_mu, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, epoch, batch, images)
         
 
         # Slot attention ===================
         for _ in range(self.iters):
             slots = self.step(slots, k_noposition, v)
 
-            # update slots ===================
-            if self.quantize and self.cb_querykey:
-                qloss1, slots, perplexity, cbidxs, _ = self.slot_quantizer(slots, 
-                                                        avg = False, 
-                                                        loss_type = 1,
-                                                        unique=True,
-                                                        final=True,
-                                                        idxs=cbidxs,
-                                                        nunique=self.nunique_slots +1)
-                qloss += qloss1
 
         if self.implicit:          
             slots = self.step(slots.detach(), k_noposition, v)
 
+        # update slots ===================
+        if self.quantize and self.cb_querykey:
+            qloss += F.mse_loss(slots_mu, slots.detach())
 
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
 

@@ -72,7 +72,7 @@ class DataGenerator(Dataset):
             self.files = os.listdir(os.path.join(self.root_dir, self.mode, 'images'))
         
 
-        self.files = self.files[:100]
+        # self.files = self.files[:100]
         self.img_transform = transforms.Compose([
                                         transforms.Resize(resolution),
                                         # transforms.RandomAffine(15, 
