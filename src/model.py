@@ -116,16 +116,14 @@ class SlotAttention(nn.Module):
 
 
         self.norm_input  = nn.LayerNorm(dim)
-
         self.norm_slots  = nn.LayerNorm(dim)
         self.norm_pre_ff = nn.LayerNorm(dim)
-
-
-
-        # self.to_k = nn.Linear(dim, dim)
-        # if self.no_position:
         self.norm_input_np  = nn.LayerNorm(dim)
+
+
+        self.to_k = nn.Linear(dim, dim)
         self.to_k_np = nn.Linear(dim, dim)
+        
         self.encoder_norm_np = nn.LayerNorm([ntokens, dim])
         self.encoder_feature_mlp_np = nn.Sequential(nn.Linear(dim, dim),
                                             nn.ReLU(inplace=True),
@@ -239,7 +237,6 @@ class SlotAttention(nn.Module):
         batched_concepts = torch.cat(batched_concepts, 0).to(features.device)
         
         batched_concepts = batched_concepts.softmax(dim = -1) + self.eps
-        # batched_concepts = batched_concepts/torch.sum(batched_concepts, dim =-1, keepdim=True)
 
         batched_concepts = torch.flip(batched_concepts, [1])
         batched_scale = torch.flip(batched_scale, [1])
@@ -436,6 +433,7 @@ class PositionalEncoding(nn.Module):
         """
         T = input.shape[1]
         return self.dropout(input + self.pe[:, :T])
+
 
 class Encoder(nn.Module):
     def __init__(self, resolution, hid_dim):

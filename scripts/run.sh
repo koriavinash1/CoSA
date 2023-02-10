@@ -17,7 +17,7 @@ python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --exp_name $NAME \
                                             --batch_size 16 \
                                             --model_dir $LOGS \
-                                            --learning_rate 0.001 \
+                                            --learning_rate 0.0004 \
                                             --quantize $QUANTIZE \
                                             --cosine $COSINE \
                                             --gumble $GUMBLE \

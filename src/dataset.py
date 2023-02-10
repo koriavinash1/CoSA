@@ -77,22 +77,22 @@ class DataGenerator(Dataset):
             self.files = [str(p) for ext in EXTS for p in Path(f'{path}').glob(f'**/*.{ext}')]
         
 
-        self.files = self.files[:100]
-        self.img_transform = transforms.Compose([
+        # self.files = self.files[:100]
+        self.img_transform = torch.nn.Sequential(
                                         transforms.Resize(resolution),
                                         # transforms.RandomAffine(15, 
                                         #                         translate=(0.15, 0.15), 
                                         #                         scale=(0.8, 1.2), 
                                         #                         shear=0.0),
-                                        transforms.ToTensor(),
                                         # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-                                    ])
+                                    )
+        self.to_tensor = transforms.ToTensor()
 
 
     def __getitem__(self, index):
         path = self.files[index]
         image = Image.open(path).convert("RGB")
-        image = self.img_transform(image)
+        image = self.to_tensor(self.img_transform(image))
         sample = {'image': image}
 
         if self.properties:
