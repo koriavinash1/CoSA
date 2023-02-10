@@ -143,7 +143,7 @@ class BaseVectorQuantizer(nn.Module):
             points_in_manifold = torch.Tensor(sphere.random_uniform(n_samples=self._num_embeddings))
             self._embedding.weight.data.copy_(points_in_manifold)
             self._get_distance = get_cosine_distance
-            self.loss_fn = lambda x1,x2: 2.0*(1 - F.cosine_similarity(x1, x2).mean())
+            self.loss_fn = F.mse_loss # lambda x1,x2: 2.0*(1 - F.cosine_similarity(x1, x2).mean())
 
         if self.qk:
             self.mu_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
@@ -198,8 +198,11 @@ class BaseVectorQuantizer(nn.Module):
 
             with torch.no_grad():
                 self._embedding.weight[dead_codes] = rand_codes
-            self._embedding.weight.requires_grad = True
+                self.mu_embeddings.weight[dead_codes] = rand_codes
 
+
+            self._embedding.weight.requires_grad = True
+            self.mu_embeddings.weight.requires_grad = True
 
     def entire_cb_restart(self):
         N = self.data_std.shape[0]
@@ -210,7 +213,25 @@ class BaseVectorQuantizer(nn.Module):
 
         with torch.no_grad():
             self._embedding.weight[:] = rand_codes
+            self.mu_embeddings.weight[:] = rand_codes
+
         self._embedding.weight.requires_grad = True
+        self.mu_embeddings.weight.requires_grad = True
+
+
+
+    def sample_mu_sigma_given_encodings(self, quantized, encodings, shape):
+        slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
+        slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
+
+        # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=1)
+        slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
+                                                device = slot_sigma.device, 
+                                                dtype = slot_sigma.dtype)
+        slots = quantized.view(shape) + slots.view(shape)
+        slot_mu = quantized.view(shape) + slot_mu.view(shape)
+        slot_sigma = slot_sigma.view(shape)
+        return slots, slot_mu, slot_sigma
 
 
     def vq_sample(self, features, st = False, idxs=None, final=False):
@@ -262,18 +283,7 @@ class BaseVectorQuantizer(nn.Module):
         slots = None
         # slot sampling
         if self.qk and (not final):
-            slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
-            slot_mu = slot_mu
-
-            slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
-
-            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
-            slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
-                                                    device = slot_sigma.device, 
-                                                    dtype = slot_sigma.dtype)
-            slots = slots.view(input_shape)
-            slot_mu = slot_mu.view(input_shape)
-            slot_sigma = slot_sigma.view(input_shape)
+            slots, slot_mu, slot_sigma = self.sample_mu_sigma_given_encodings(quantized, encodings, input_shape)
 
         return quantized.view(input_shape), encoding_indices, encodings, slots, None, slot_sigma, slot_mu
 
@@ -317,16 +327,8 @@ class BaseVectorQuantizer(nn.Module):
         slots = None
         # slot sampling
         if self.qk and (not final):
-            slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
-            slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
+            slots, slot_mu, slot_sigma = self.sample_mu_sigma_given_encodings(quantized, encodings, input_shape)
 
-            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
-            slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
-                                                    device = slot_sigma.device, 
-                                                    dtype = slot_sigma.dtype)
-            slots = slots.view(input_shape)
-            slot_mu = slot_mu.view(input_shape)
-            slot_sigma = slot_sigma.view(input_shape)
        
         return quantized, encoding_indices, encodings, slots, logits, slot_sigma, slot_mu
 
@@ -357,16 +359,16 @@ class BaseVectorQuantizer(nn.Module):
                 loss = 0
             else:
                 qy = F.softmax(logits, dim=-1)
-                loss = self.kld_scale * torch.mean(qy * torch.log(qy * self._num_embeddings + 1e-10), dim=1).mean()
+                loss = self.kld_scale * torch.sum(qy * torch.log(qy * self._num_embeddings + 1e-10), dim=1).mean()
 
         else:
              # Loss
             if not avg:
-                e_latent_loss = self.loss_fn(quantized.clone().detach(), inputs)
-                q_latent_loss = self.loss_fn(quantized, inputs.clone().detach())
+                e_latent_loss = self.loss_fn(quantized.detach(), inputs)
+                q_latent_loss = self.loss_fn(quantized, inputs.detach())
             else:
-                e_latent_loss = self.loss_fn(quantized.mean(1).clone().detach(), inputs.mean(1))
-                q_latent_loss = self.loss_fn(quantized.mean(1), inputs.mean(1).clone().detach())
+                e_latent_loss = self.loss_fn(quantized.mean(1).detach(), inputs.mean(1))
+                q_latent_loss = self.loss_fn(quantized.mean(1), inputs.mean(1).detach())
 
 
             if loss_type == 0:
@@ -393,11 +395,11 @@ class BaseVectorQuantizer(nn.Module):
             
             qkloss += self.loss_fn(inputs.clone().detach(), mean.view(input_shape))
         else:
-            # qkloss += get_cb_variance(self.mu_embeddings.weight)
-            qkloss += 0.001*torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
+            qkloss += get_cb_variance(self.mu_embeddings.weight)
+            # qkloss += 0.001 * torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
 
             # kl loss between sampled marginal distributions
-            qkloss += 0.01 *  torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
+            qkloss += torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
            
         return qkloss
 
@@ -545,6 +547,7 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
         inputs = self.proj(inputs)
         # layer norm on features
         inputs = self.norm_input(inputs)
+
         # Flatten input
         flat_input = inputs.view(-1, self._embedding_dim)
 
@@ -587,7 +590,7 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
 
         if not (loss_type == 2):
             if self.qk:
-                qkloss = self.compute_qkloss(final, 
+                qkloss = 0.01*self.compute_qkloss(final, 
                                                 encodings, 
                                                 inputs, 
                                                 avg, 
@@ -596,6 +599,7 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
                                                 mean)
             
             # loss += get_cb_variance(self._embedding.weight)
+            print (f'feature: {inputs.max()}, qfeatures: {quantized.max()}, quant loss: {loss}, QKloss: {qkloss}, key: {torch.max(self._embedding.weight)}, mu: {torch.max(self.mu_embeddings.weight)}, sigma: {torch.max(self.sigma_embeddings.weight)}')
             loss += qkloss
 
 

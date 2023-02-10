@@ -29,24 +29,28 @@ def str2bool(v):
 
 parser.add_argument('--model_dir', default='Logs', type=str, help='where to save models' )
 parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
-parser.add_argument('--data_root', default='/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3', type=str, help='where to save models' )
-parser.add_argument('--seed', default=0, type=int, help='random seed')
-parser.add_argument('--batch_size', default=32, type=int)
-
-parser.add_argument('--num_slots', default=10, type=int, help='Number of slots in Slot Attention.')
-parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
-parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
-parser.add_argument('--hid_dim', default=128, type=int, help='hidden dimension size')
-parser.add_argument('--learning_rate', default=0.0004, type=float)
+parser.add_argument('--dataset_name', default='clevr', type=str, help='where to save models' )
+parser.add_argument('--variant', default='hans3', type=str, help='where to save models' )
 
 parser.add_argument('--img_size', default=128, type=int)
 parser.add_argument('--encoder_res', default=8, type=int)
 parser.add_argument('--decoder_res', default=8, type=int)
 
+
+parser.add_argument('--seed', default=0, type=int, help='random seed')
+parser.add_argument('--batch_size', default=32, type=int)
+
+parser.add_argument('--nunique_objects', type=int, default=8)
+parser.add_argument('--num_slots', default=7, type=int, help='Number of slots in Slot Attention.')
+parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
+parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
+parser.add_argument('--hid_dim', default=128, type=int, help='hidden dimension size')
+parser.add_argument('--learning_rate', default=0.0004, type=float)
+
 parser.add_argument('--warmup_steps', default=10000, type=int, help='Number of warmup steps for the learning rate.')
 parser.add_argument('--decay_rate', default=0.5, type=float, help='Rate for the learning rate decay.')
 parser.add_argument('--decay_steps', default=100000, type=int, help='Number of steps for the learning rate decay.')
-parser.add_argument('--num_workers', default=10, type=int, help='number of workers for loading data')
+parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
 
 parser.add_argument('--quantize', default=False, type=str2bool, help='perform slot quantization')
@@ -54,13 +58,12 @@ parser.add_argument('--cosine', default=False, type=str2bool, help='use geodesic
 parser.add_argument('--unique_sampling', default=False, type=str2bool, help='use unique sampling')
 
 
-parser.add_argument('--nunique_objects', type=int, default=8)
 parser.add_argument('--variational', type=str2bool, default=False)
 parser.add_argument('--binarize', type=str2bool, default=False)
 parser.add_argument('--eigen_noposition', type=str2bool, default=True)
 
 parser.add_argument('--overlap_weightage', type=float, default=0.0)
-parser.add_argument('--cb_decay', type=float, default=0.0)
+parser.add_argument('--cb_decay', type=float, default=0.999)
 
 parser.add_argument('--cb_qk', type=str2bool, default=False)
 parser.add_argument('--eigen_quantizer', type=str2bool, default=False)
@@ -75,10 +78,83 @@ parser.add_argument('--kld_scale', type=float, default=1.0)
 
 
 opt = parser.parse_args()
-resolution = (opt.img_size, opt.img_size)
-
 opt.model_dir = os.path.join(opt.model_dir, opt.exp_name)
 
+
+# set information based on dataset and it variant
+if opt.dataset_name == 'bitmoji':
+    opt.variant ='none'
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 64
+    opt.max_slots = 32
+    opt.nunique_objects = 9
+    opt.data_root = '/vol/biomedic3/agk21/datasets/bitmoji'
+
+elif opt.dataset_name == 'clevr':
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 64
+    opt.max_slots = 19
+    if opt.variant == 'hans3':
+        opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3'
+        opt.nunique_objects = 4
+    elif opt.variant == 'hans7':
+        opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans7'
+        opt.nunique_objects = 8
+    else:
+        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/clevr_with_masks'
+        opt.nunique_objects = 8
+
+
+elif opt.dataset_name == 'multi_dsprites':
+    opt.encoder_res = 2
+    opt.decoder_res = 2
+    opt.img_size = 32
+    opt.max_slots = 5    
+    opt.num_slots = 4
+    opt.nunique_objects = 4
+
+    if opt.variant == 'colored_on_colored':
+        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/multi_dsprites/colored_on_colored'
+    else:
+        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/multi_dsprites/colored_on_grayscale'
+
+
+elif opt.dataset_name == 'objects_room':
+    opt.variant ='default'
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 64
+    opt.max_slots = 17
+    opt.nunique_objects = 8
+    opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/objects_room/default'
+
+
+elif opt.dataset_name == 'tetrominoes':
+    opt.variant ='default'
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 64
+    opt.max_slots = 20
+    opt.nunique_objects = 17
+    opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/tetrominoes'
+
+
+elif opt.dataset_name == 'ffhq':
+    opt.variant ='default'
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 64
+    opt.max_slots = 64
+    opt.nunique_objects = 15
+    opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/FFHQ/data'
+
+else:
+    raise ValueError('Invalid dataset found')
+
+
+resolution = (opt.img_size, opt.img_size)
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
 arg_str = '__'.join(arg_str_list)
 

@@ -1,39 +1,26 @@
-ENCODERRES=$1
-DECODERRES=$2
-IMSIZE=$3
-CBDECAY=$4
-NCONCEPTS=$5
-OPWEIGHTAGE=$6
+DATASET=$1
+VARIANT=$2
+QUANTIZE=$3
+COSINE=$4
+GUMBLE=$5
+CBQKEY=$6
+CBRESTART=$7
+EIGENQUANTIZER=$8
+NAME=$9
+ITER=${10}
 
-GUMBLE=${7}
-QUANTIZE=$8
-COSINE=$9
-VAR=${10}
-CBQKEY=${11}
-CBRESTART=${12}
-EIGENQUANTIZER=${13}
-BINARIZE=${14}
-NAME=${15}
-ITER=${16}
-
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting2'
+NAME=$DATASET$VARIANT$NAME
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting'
 python /vol/biomedic3/agk21/testEigenSlots2/train.py \
+                                            --dataset_name $DATASET \
+                                            --variant $VARIANT \
                                             --exp_name $NAME \
                                             --batch_size 16 \
                                             --model_dir $LOGS \
-                                            --img_size $IMSIZE \
-                                            --encoder_res $ENCODERRES \
-                                            --decoder_res $DECODERRES \
                                             --learning_rate 0.001 \
-                                            --cb_decay $CBDECAY \
-                                            --nunique_objects $NCONCEPTS \
-                                            --max_slots $((2*$NCONCEPTS + 2)) \
-                                            --overlap_weightage $OPWEIGHTAGE \
                                             --quantize $QUANTIZE \
                                             --cosine $COSINE \
-                                            --binarize $BINARIZE \
                                             --gumble $GUMBLE \
-                                            --variational $VAR \
                                             --num_iterations $ITER \
                                             --cb_qk $CBQKEY \
                                             --eigen_quantizer $EIGENQUANTIZER \

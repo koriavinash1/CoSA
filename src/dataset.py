@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 
 import json
+from pathlib import Path
 
 
 
@@ -46,10 +47,13 @@ def get_paths_with_properties_CLEVR(root_path, mode, max_objects=7):
     return paths, properties
 
 
+
+
 # 3D shapes dataset
 # Shape stack
 # bitmoji
 # flying mnist
+EXTS = ['jpg', 'jpeg', 'png']
 class DataGenerator(Dataset):
     def __init__(self, root, 
                         mode='train',
@@ -69,10 +73,11 @@ class DataGenerator(Dataset):
         if self.properties:
             self.files, self.properties = get_paths_with_properties_CLEVR(root, mode, max_objects)
         else:
-            self.files = os.listdir(os.path.join(self.root_dir, self.mode, 'images'))
+            path = os.path.join(self.root_dir, self.mode)
+            self.files = [str(p) for ext in EXTS for p in Path(f'{path}').glob(f'**/*.{ext}')]
         
 
-        # self.files = self.files[:100]
+        self.files = self.files[:100]
         self.img_transform = transforms.Compose([
                                         transforms.Resize(resolution),
                                         # transforms.RandomAffine(15, 
@@ -86,7 +91,7 @@ class DataGenerator(Dataset):
 
     def __getitem__(self, index):
         path = self.files[index]
-        image = Image.open(os.path.join(self.root_dir, self.mode, 'images', path)).convert("RGB")
+        image = Image.open(path).convert("RGB")
         image = self.img_transform(image)
         sample = {'image': image}
 

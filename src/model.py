@@ -32,7 +32,7 @@ def reorder_slots(slots, slots_mu, cidxs, ns=10):
             slots = torch.cat([slots, orig_slots[:, 1:, :]], 1)
             slots_mu = torch.cat([slots_mu, orig_slots_mu[:, 1:, :]], 1)
             cidxs = torch.cat([cidxs, orig_idxs[:, 1:]], 1)
-    return slots[:, :ns, :], slots_mu[:, :ns, :], cidxs
+    return slots[:, :ns, :], slots_mu[:, :ns, :], cidxs[:, :ns]
 
 
 class SlotAttention(nn.Module):
@@ -43,7 +43,7 @@ class SlotAttention(nn.Module):
                         hidden_dim = 128,
                         max_slots=64, 
                         nunique_slots=8,
-                        beta=0.75,
+                        beta=0.2,
                         encoder_intial_res=(8, 8),
                         decoder_intial_res=(8, 8),
                         quantize=False,
@@ -77,7 +77,7 @@ class SlotAttention(nn.Module):
         self.cov_binarize = cov_binarize
         self.min_number_elements = 3 + 1
 
-        assert self.num_slots < np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
+        assert self.num_slots <= np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
 
         # ===========================================
         # encoder postional embedding with linear transformation
@@ -195,28 +195,17 @@ class SlotAttention(nn.Module):
                 (x.max(dim, keepdim=True)[0] - x.min(dim, keepdim=True)[0] + 0.0001)
 
 
+    @torch.no_grad()
     def passthrough_eigen_basis(self, x):
         # x: token embeddings B x ntokens x token_embeddings
 
         x = F.normalize(x, p=2, dim=-1)
-        coveriance_matrix = torch.einsum('bkf, bgf -> bkg', x, x) + 0.0001
+        coveriance_matrix = torch.einsum('bkf, bgf -> bkg', x, x)
 
-        # if self.cov_binarize:
-        #     # apply softmax on token dimension 
-        #     coveriance_matrix = torch.softmax(coveriance_matrix, dim = 1)
-
-
-
-        # eigen vectors are arranged in ascending order of their eigen values, so picking last n objects
+        # eigen vectors are arranged in ascending order of their eigen values
         eigen_values, eigen_vectors = torch.symeig(coveriance_matrix, eigenvectors=True)
 
-        # eigen_vectors = eigen_vectors[:, :, -self.nunique_slots+1:].permute(0, 2, 1)
-        # eigen_values = eigen_values[:, -self.nunique_slots+1:]
-
-
         eigen_vectors = eigen_vectors.permute(0, 2, 1)        
-        # eigen_vectors = eigen_vectors.softmax(dim = -1) + self.eps
-        # eigen_vectors = eigen_vectors/torch.sum(eigen_vectors, dim =-1, keepdim=True)
 
         eigen_vectors = torch.flip(eigen_vectors, [1])
         eigen_values = torch.flip(eigen_values, [1])
@@ -302,14 +291,14 @@ class SlotAttention(nn.Module):
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
         if self.quantize:
-            # if self.restart_cbstats and (epoch % 5 == 4) and (batch == 0) and (epoch < 25): 
-            #     self.slot_quantizer.entire_cb_restart()
+            if self.restart_cbstats and (epoch % 2 == 1) and (batch == 0) and (epoch < 8): 
+                self.slot_quantizer.entire_cb_restart()
 
 
             if self.eigen_quantizer:
                 # Compute Principle directions and scale
 
-                eigen_basis, eigen_values = self.passthrough_eigen_basis(k)
+                eigen_basis, eigen_values = self.passthrough_eigen_basis(k.clone().detach())
                 # eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
 
                 eigen_values = torch.round(eigen_values)
@@ -332,14 +321,15 @@ class SlotAttention(nn.Module):
 
 
                 # sample objects
-                k_, _, _, _, _, _, _  = self.slot_quantizer.sample(k,
-                                                                idxs=cbidxs, 
-                                                                st=True)
-
+                # with torch.no_grad():
+                #     k_, _, _, _, _, _, _  = self.slot_quantizer.sample(k,
+                #                                                 idxs=cbidxs)
+                # k_ = k + (k_ - k).detach()
+                k_ = k 
             else:
                 qloss, k_, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(k, 
                                                     avg = False, 
-                                                    loss_type = 2,
+                                                    loss_type = 1,
                                                     update = self.restart_cbstats,
                                                     reset_usage = (batch == 0))
             
@@ -355,7 +345,7 @@ class SlotAttention(nn.Module):
             slot_mu = self.slots_mu.expand(b, n_s, -1)
             slot_sigma = self.slots_sigma.expand(b, n_s, -1)
 
-            slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=2)
+            # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=1)
             slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
                                                     device = slot_sigma.device, 
                                                     dtype = slot_sigma.dtype)
@@ -373,24 +363,29 @@ class SlotAttention(nn.Module):
         inputs_features = self.norm_input(inputs_features)
 
 
-        inputs_features_noposition = self.encoder_transformation(inputs, position = False)
-        inputs_features_noposition = self.norm_input_np(inputs_features_noposition)
+        # inputs_features_noposition = self.encoder_transformation(inputs, position = True)
+        # inputs_features_noposition = self.norm_input_np(inputs_features_noposition)
+        # k_position = self.to_k(inputs_features)
 
 
-        k_noposition =  self.to_k_np(inputs_features_noposition)
+        k =  self.to_k_np(inputs_features)
         v = self.to_v(inputs_features)
 
+
+        
         # Sample Slots ========================
-        k_noposition_, slots, slots_mu, qloss, perplexity, cbidxs = self.sample_slots(inputs, n_s, k_noposition, epoch, batch, images)
+        k, slots, slots_mu, qloss, perplexity, cbidxs = self.sample_slots(inputs, 
+                                                                            n_s, k, 
+                                                                            epoch, batch, images)
         
 
         # Slot attention ===================
         for _ in range(self.iters):
-            slots = self.step(slots, k_noposition, v)
+            slots = self.step(slots, k, v)
 
 
         if self.implicit:          
-            slots = self.step(slots.detach(), k_noposition, v)
+            slots = self.step(slots.detach(), k, v)
 
         # update slots ===================
         if self.quantize and self.cb_querykey:
@@ -446,55 +441,35 @@ class Encoder(nn.Module):
     def __init__(self, resolution, hid_dim):
         super().__init__()
         self.conv1 = nn.Conv2d(3, hid_dim, 5, stride=2, padding = 2)
-        # self.conv11 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
-
         self.conv2 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
-        # self.conv21 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
-
         self.conv3 = nn.Conv2d(hid_dim, hid_dim, 5, stride=2, padding = 2)
-        # self.conv31 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
-
-        self.conv4 = nn.Conv2d(hid_dim, hid_dim, 5, stride=1, padding = 2)
-        # self.conv41 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
+        self.conv4 = nn.Conv2d(hid_dim, hid_dim, 5, stride=2, padding = 2)
 
     def forward(self, x):
         x = self.conv1(x)
         x = F.relu(x)
 
-        # x = self.conv11(x)
-        # x = F.relu(x)
-
         x = self.conv2(x)
         x = F.relu(x)
-
-        # x = self.conv21(x)
-        # x = F.relu(x)
-
 
         x = self.conv3(x)
         x = F.relu(x)
 
-        # x = self.conv31(x)
-        # x = F.relu(x)
-
-
         x = self.conv4(x)
         x = F.relu(x)
 
-        # x = self.conv41(x)
-        # x = F.relu(x)
         return x
 
 
 class Decoder(nn.Module):
     def __init__(self, hid_dim, resolution):
         super().__init__()
-        self.conv1 = nn.ConvTranspose2d(hid_dim, hid_dim, 3, stride=(1, 1), padding=1).to(device)
-        self.conv2 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
-        self.conv3 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
-        self.conv4 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(2, 2), padding=2, output_padding=1).to(device)
-        self.conv5 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=(1, 1), padding=2).to(device)
-        self.conv6 = nn.ConvTranspose2d(hid_dim, 4, 3, stride=(1, 1), padding=1)
+        self.conv1 = nn.ConvTranspose2d(hid_dim, hid_dim, 3, stride=1, padding=1).to(device)
+        self.conv2 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
+        self.conv3 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
+        self.conv4 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
+        self.conv5 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
+        self.conv6 = nn.ConvTranspose2d(hid_dim, 4, 3, stride=1, padding=1)
 
         self.resolution = resolution
 
@@ -510,7 +485,7 @@ class Decoder(nn.Module):
         x = self.conv5(x)
         x = F.relu(x)
         x = self.conv6(x)
-        # x = F.relu6(x)
+        x = F.relu(x)
         x = x[:,:,:self.resolution[0], :self.resolution[1]]
         return x
 
