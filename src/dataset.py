@@ -78,6 +78,7 @@ class DataGenerator(Dataset):
         
 
         # self.files = self.files[:100]
+        # self.img_transform = transforms.Compose([
         self.img_transform = torch.nn.Sequential(
                                         transforms.Resize(resolution),
                                         # transforms.RandomAffine(15, 

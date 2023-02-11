@@ -83,19 +83,22 @@ opt.model_dir = os.path.join(opt.model_dir, opt.exp_name)
 
 # set information based on dataset and it variant
 if opt.dataset_name == 'bitmoji':
-    opt.variant ='none'
-    opt.encoder_res = 4
-    opt.decoder_res = 4
+    opt.variant ='default'
+    opt.encoder_res = 8
+    opt.decoder_res = 8
     opt.img_size = 64
     opt.max_slots = 32
     opt.nunique_objects = 9
+    opt.num_slots = 7
     opt.data_root = '/vol/biomedic3/agk21/datasets/bitmoji'
 
 elif opt.dataset_name == 'clevr':
-    opt.encoder_res = 4
-    opt.decoder_res = 4
+    opt.encoder_res = 8
+    opt.decoder_res = 8
     opt.img_size = 64
     opt.max_slots = 19
+    opt.num_slots = 7
+
     if opt.variant == 'hans3':
         opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3'
         opt.nunique_objects = 4
@@ -108,12 +111,12 @@ elif opt.dataset_name == 'clevr':
 
 
 elif opt.dataset_name == 'multi_dsprites':
-    opt.encoder_res = 2
-    opt.decoder_res = 2
+    opt.encoder_res = 4
+    opt.decoder_res = 4
     opt.img_size = 32
     opt.max_slots = 5    
-    opt.num_slots = 4
-    opt.nunique_objects = 4
+    opt.num_slots = 5
+    opt.nunique_objects = 5
 
     if opt.variant == 'colored_on_colored':
         opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/multi_dsprites/colored_on_colored'
@@ -125,8 +128,9 @@ elif opt.dataset_name == 'objects_room':
     opt.variant ='default'
     opt.encoder_res = 4
     opt.decoder_res = 4
-    opt.img_size = 64
-    opt.max_slots = 17
+    opt.img_size = 32
+    opt.max_slots = 16
+    opt.num_slots = 6
     opt.nunique_objects = 8
     opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/objects_room/default'
 
@@ -135,18 +139,20 @@ elif opt.dataset_name == 'tetrominoes':
     opt.variant ='default'
     opt.encoder_res = 4
     opt.decoder_res = 4
-    opt.img_size = 64
+    opt.img_size = 32
     opt.max_slots = 20
-    opt.nunique_objects = 17
+    opt.nunique_objects = 16
+    opt.num_slots = 5
     opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/tetrominoes'
 
 
 elif opt.dataset_name == 'ffhq':
     opt.variant ='default'
-    opt.encoder_res = 4
-    opt.decoder_res = 4
+    opt.encoder_res = 8
+    opt.decoder_res = 8
     opt.img_size = 64
     opt.max_slots = 64
+    opt.num_slots = 7
     opt.nunique_objects = 15
     opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/FFHQ/data'
 
@@ -201,19 +207,19 @@ params = [{'params': model.parameters()}]
 
 train_set = DataGenerator(root=opt.data_root, mode='train', resolution=resolution)
 train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers)
+                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
 val_set = DataGenerator(root=opt.data_root, mode='val',  resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers)
+                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
 test_set = DataGenerator(root=opt.data_root, mode='test',  resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers)
+                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
 
-train_epoch_size = len(train_dataloader)
-val_epoch_size = len(val_dataloader)
+train_epoch_size = min(50000, len(train_dataloader))
+val_epoch_size = min(10000, len(val_dataloader))
 
 opt.log_interval = train_epoch_size // 5
 optimizer = optim.Adam(params, lr=opt.learning_rate)
@@ -228,6 +234,7 @@ def visualize(image, recon_orig, attns, N=8):
     recon_orig = recon_orig[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
     attns = attns[:N].expand(-1, -1, 3, H, W)
     return torch.cat((image, recon_orig, attns), dim=1).view(-1, 3, H, W)
+
 
 def linear_warmup(step, start_value, final_value, start_step, final_step):
     
@@ -273,7 +280,6 @@ class SoftDiceLossV1(nn.Module):
         loss = (2 * numer + self.smooth) / (denor + self.smooth)
         return loss
     
-
 _dice_loss_ = SoftDiceLossV1()
 
 def dice_loss(masks):
@@ -299,6 +305,7 @@ def training_step(model, optimizer, epoch, opt):
     idxs = []
     total_loss = 0; recon_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
+        if ibatch > train_epoch_size: break
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
         recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, 
@@ -307,20 +314,18 @@ def training_step(model, optimizer, epoch, opt):
         recon_loss_ = ((image - recon_combined)**2).mean()
         
         overlap_loss_ = dice_loss(masks)
-        loss = recon_loss_ + 0.5*qloss + opt.overlap_weightage*overlap_loss_
+        loss = recon_loss_ + qloss + opt.overlap_weightage*overlap_loss_
 
         total_loss += loss.item()
         recon_loss += recon_loss_.item()
         quant_loss += qloss.item()
         overlap_loss += overlap_loss_.item()
 
-        # print (model.slot_attention.slot_quantizer.mu_embeddings.weight, '====')
 
         optimizer.zero_grad()
         loss.backward()
-        # print (model.slot_attention.slot_quantizer.mu_embeddings.weight.grad, 'GRAD  ====')
 
-        clip_grad_norm_(model.parameters(), 10.0, 'inf')
+        # clip_grad_norm_(model.parameters(), 10.0, 'inf')
         optimizer.step()
 
         idxs.append(cbidxs)
@@ -359,15 +364,17 @@ def validation_step(model, optimizer, epoch, opt):
     idxs = []
     total_loss = 0; recon_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(val_dataloader)):
+        if ibatch > val_epoch_size: break
         global_step = epoch * val_epoch_size + ibatch
         image = sample['image'].to(device)
         recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, 
                                                                                 epoch=epoch, 
                                                                                 batch=ibatch)
+
         recon_loss_ = ((image - recon_combined)**2).mean()
         
         overlap_loss_ = dice_loss(masks)
-        loss = recon_loss_ + 0.5*qloss + opt.overlap_weightage*overlap_loss_
+        loss = recon_loss_ + qloss + opt.overlap_weightage*overlap_loss_
 
         total_loss += loss.item()
         recon_loss += recon_loss_.item()
@@ -409,6 +416,7 @@ min_recon_loss = 1000000.0
 
 for epoch in range(opt.num_epochs):
     model.train()
+   
     training_stats = training_step(model, optimizer, epoch, opt)
     print ("TrainingLogs Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
                                                         opt.exp_name,
@@ -424,8 +432,16 @@ for epoch in range(opt.num_epochs):
                                                         epoch, 
                                                         validation_stats
                                                         ))
-    print ('='*50)
+    print ('='*150)
 
+    # lr_warmup_factor = linear_warmup(epoch*train_epoch_size, 0.0, 1.0, 0, opt.warmup_steps)
+    # if epoch*train_epoch_size < opt.warmup_steps: 
+    #     learning_rate = opt.learning_rate *(epoch * train_epoch_size / opt.warmup_steps)
+    # else:
+    #     learning_rate = opt.learning_rate
+    
+
+    
     lrscheduler.step(validation_stats['recon_loss'])
 
     if min_recon_loss > validation_stats['recon_loss']:
@@ -443,6 +459,8 @@ for epoch in range(opt.num_epochs):
         'vstats': validation_stats,
         'tstats': training_stats, 
         }, os.path.join(opt.model_dir, f'discovery_last.pth'))
+
+
 
     if epoch > 5:
         opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)

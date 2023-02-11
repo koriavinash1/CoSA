@@ -115,14 +115,15 @@ class SlotAttention(nn.Module):
                                     nn.Linear(hidden_dim, dim))
 
 
-        self.norm_input  = nn.LayerNorm(dim)
         self.norm_slots  = nn.LayerNorm(dim)
         self.norm_pre_ff = nn.LayerNorm(dim)
-        self.norm_input_np  = nn.LayerNorm(dim)
 
 
         self.to_k = nn.Linear(dim, dim)
+        self.norm_input  = nn.LayerNorm(dim)
+
         self.to_k_np = nn.Linear(dim, dim)
+        self.norm_input_np  = nn.LayerNorm(dim)
         
         self.encoder_norm_np = nn.LayerNorm([ntokens, dim])
         self.encoder_feature_mlp_np = nn.Sequential(nn.Linear(dim, dim),
@@ -341,8 +342,8 @@ class SlotAttention(nn.Module):
             k_ = k
             slot_mu = self.slots_mu.expand(b, n_s, -1)
             slot_sigma = self.slots_sigma.expand(b, n_s, -1)
+            slot_sigma = torch.exp(0.5*slot_sigma)
 
-            # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=1)
             slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
                                                     device = slot_sigma.device, 
                                                     dtype = slot_sigma.dtype)
@@ -362,10 +363,10 @@ class SlotAttention(nn.Module):
 
         # inputs_features_noposition = self.encoder_transformation(inputs, position = True)
         # inputs_features_noposition = self.norm_input_np(inputs_features_noposition)
-        # k_position = self.to_k(inputs_features)
+        # k_noposition = self.to_k_np(inputs_features)
 
 
-        k =  self.to_k_np(inputs_features)
+        k = self.to_k(inputs_features)
         v = self.to_v(inputs_features)
 
 
@@ -441,7 +442,7 @@ class Encoder(nn.Module):
         self.conv1 = nn.Conv2d(3, hid_dim, 5, stride=2, padding = 2)
         self.conv2 = nn.Conv2d(hid_dim, hid_dim, 5,  stride=2, padding = 2)
         self.conv3 = nn.Conv2d(hid_dim, hid_dim, 5, stride=2, padding = 2)
-        self.conv4 = nn.Conv2d(hid_dim, hid_dim, 5, stride=2, padding = 2)
+        self.conv4 = nn.Conv2d(hid_dim, hid_dim, 5, stride=1, padding = 2)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -466,7 +467,7 @@ class Decoder(nn.Module):
         self.conv2 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
         self.conv3 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
         self.conv4 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
-        self.conv5 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=2, padding=2, output_padding=1).to(device)
+        self.conv5 = nn.ConvTranspose2d(hid_dim, hid_dim, 5, stride=1, padding=2).to(device)
         self.conv6 = nn.ConvTranspose2d(hid_dim, 4, 3, stride=1, padding=1)
 
         self.resolution = resolution
@@ -483,7 +484,6 @@ class Decoder(nn.Module):
         x = self.conv5(x)
         x = F.relu(x)
         x = self.conv6(x)
-        x = F.relu(x)
         x = x[:,:,:self.resolution[0], :self.resolution[1]]
         return x
 
@@ -685,6 +685,44 @@ class SlotAttentionClassifier(nn.Module):
     predictions = self.mlp_classifier(slots)
 
     return predictions, cbidxs, qloss, perplexity
+
+
+    def _transform_attrs(self, attrs):
+        """
+        receives the attribute predictions and binarizes them by computing the argmax per attribute group
+        :param attrs: 3D Tensor, [batch, n_slots, n_attrs] attribute predictions for a batch.
+        :return: binarized attribute predictions
+        """
+        presence = attrs[:, :, 0]
+        attrs_trans = attrs[:, :, 1:]
+
+        # threshold presence prediction, i.e. where is an object predicted
+        presence = presence < 0.5
+
+        # flatten first two dims
+        attrs_trans = attrs_trans.view(1, -1, attrs_trans.shape[2]).squeeze()
+        # binarize attributes
+        # set argmax per attr to 1, all other to 0, s.t. only zeros and ones are contained within graph
+        # NOTE: this way it is not differentiable!
+        bin_attrs = torch.zeros(attrs_trans.shape, device=self.device)
+        for i in range(len(self.category_ids) - 1):
+            # find the argmax within each category and set this to one
+            bin_attrs[range(bin_attrs.shape[0]),
+                      # e.g. x[:, 0:(3+0)], x[:, 3:(5+3)], etc
+                      (attrs_trans[:,
+                       self.category_ids[i]:self.category_ids[i + 1]].argmax(dim=1) + self.category_ids[i]).type(
+                          torch.LongTensor)] = 1
+
+        # reshape back to batch x n_slots x n_attrs
+        bin_attrs = bin_attrs.view(attrs.shape[0], attrs.shape[1], attrs.shape[2] - 1)
+
+        # add coordinates back
+        bin_attrs[:, :, :3] = attrs[:, :, 1:4]
+
+        # redo presence zeroing
+        bin_attrs[presence, :] = 0
+
+        return bin_attrs
 
 
 
