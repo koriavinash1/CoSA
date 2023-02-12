@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch
 import json
+import cv2
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 
@@ -44,7 +45,7 @@ parser.add_argument('--nunique_objects', type=int, default=8)
 parser.add_argument('--num_slots', default=7, type=int, help='Number of slots in Slot Attention.')
 parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
 parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
-parser.add_argument('--hid_dim', default=128, type=int, help='hidden dimension size')
+parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
 parser.add_argument('--learning_rate', default=0.0004, type=float)
 
 parser.add_argument('--warmup_steps', default=10000, type=int, help='Number of warmup steps for the learning rate.')
@@ -106,7 +107,7 @@ elif opt.dataset_name == 'clevr':
         opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans7'
         opt.nunique_objects = 8
     else:
-        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/clevr_with_masks'
+        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/clevr_with_masks'
         opt.nunique_objects = 8
 
 
@@ -119,9 +120,9 @@ elif opt.dataset_name == 'multi_dsprites':
     opt.nunique_objects = 5
 
     if opt.variant == 'colored_on_colored':
-        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/multi_dsprites/colored_on_colored'
+        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/multi_dsprites/colored_on_colored'
     else:
-        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/multi_dsprites/colored_on_grayscale'
+        opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/multi_dsprites/colored_on_grayscale'
 
 
 elif opt.dataset_name == 'objects_room':
@@ -132,7 +133,7 @@ elif opt.dataset_name == 'objects_room':
     opt.max_slots = 16
     opt.num_slots = 6
     opt.nunique_objects = 8
-    opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/objects_room/default'
+    opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/objects_room/default'
 
 
 elif opt.dataset_name == 'tetrominoes':
@@ -143,7 +144,7 @@ elif opt.dataset_name == 'tetrominoes':
     opt.max_slots = 20
     opt.nunique_objects = 16
     opt.num_slots = 5
-    opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData/tetrominoes'
+    opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/tetrominoes'
 
 
 elif opt.dataset_name == 'ffhq':
@@ -227,13 +228,31 @@ lrscheduler = ReduceLROnPlateau(optimizer, 'min')
 
 # criterion = nn.MSELoss()
 
-def visualize(image, recon_orig, attns, N=8):
+def create_histogram(k, img_size, cbidx):
+    image = np.zeros((2*k + 2, 2*k + 2, 3), dtype='uint8')
+    
+    cbidx = cbidx.detach().cpu().numpy()
+    for uidx in np.unique(cbidx):
+        count = np.sum(cbidx == uidx)
+        image[:int(2*count), int(2*uidx):int(2*uidx+2), :] = (125, 255, 25)
+    
+    image = cv2.resize(image, img_size, cv2.INTER_NEAREST)
+    image = image*1.0/255
+    image = np.flipud(image)
+    return 1 - image.transpose(2, 0, 1)
+
+
+def visualize(image, recon_orig, attns, cbidxs, N=8):
     _, _, H, W = image.shape
     attns = attns.permute(0, 1, 4, 2, 3)
     image = image[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
     recon_orig = recon_orig[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
     attns = attns[:N].expand(-1, -1, 3, H, W)
-    return torch.cat((image, recon_orig, attns), dim=1).view(-1, 3, H, W)
+
+    histograms = np.array([create_histogram(opt.max_slots, (W, H), idxs) for idxs in cbidxs[:N]])
+    histograms = torch.from_numpy(histograms).to(image.device).type(image.dtype).unsqueeze(1)
+    
+    return torch.cat((image, recon_orig, attns, histograms), dim=1).view(-1, 3, H, W)
 
 
 def linear_warmup(step, start_value, final_value, start_step, final_step):
@@ -343,8 +362,8 @@ def training_step(model, optimizer, epoch, opt):
 
     with torch.no_grad():
         attns = recons * masks + (1 - masks)
-        vis_recon = visualize(image, recon_combined, attns, N=32)
-        grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 2, pad_value=0.2)[:, 2:-2, 2:-2]
+        vis_recon = visualize(image, recon_combined, attns, cbidxs, N=32)
+        grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 3, pad_value=0.2)[:, 2:-2, 2:-2]
         writer.add_image('TRAIN/recon_epoch={:03}'.format(epoch+1), grid)
 
         del recons, masks, slots
@@ -395,8 +414,8 @@ def validation_step(model, optimizer, epoch, opt):
 
 
     attns = recons * masks + (1 - masks)
-    vis_recon = visualize(image, recon_combined, attns, N=32)
-    grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 2, pad_value=0.2)[:, 2:-2, 2:-2]
+    vis_recon = visualize(image, recon_combined, attns, cbidxs, N=32)
+    grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 3, pad_value=0.2)[:, 2:-2, 2:-2]
     writer.add_image('VALID/recon_epoch={:03}'.format(epoch+1), grid)
 
     del recons, masks, slots
@@ -434,16 +453,18 @@ for epoch in range(opt.num_epochs):
                                                         ))
     print ('='*150)
 
-    # lr_warmup_factor = linear_warmup(epoch*train_epoch_size, 0.0, 1.0, 0, opt.warmup_steps)
+
     # if epoch*train_epoch_size < opt.warmup_steps: 
     #     learning_rate = opt.learning_rate *(epoch * train_epoch_size / opt.warmup_steps)
     # else:
     #     learning_rate = opt.learning_rate
-    
+   
+    # learning_rate = learning_rate * (opt.decay_rate ** (epoch * train_epoch_size / opt.decay_steps))
+    # optimizer.param_groups[0]['lr'] = learning_rate
 
     
+
     lrscheduler.step(validation_stats['recon_loss'])
-
     if min_recon_loss > validation_stats['recon_loss']:
         min_recon_loss = validation_stats['recon_loss']
         torch.save({

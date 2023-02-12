@@ -9,7 +9,7 @@
 # NAME=$9
 # ITER=${10}
 
-
+./slurm-wrapper.sh clevr hans3 False False False False False False test 3
 ./slurm-wrapper.sh clevr hans3 False False False False False False test 5
 ./slurm-wrapper.sh clevr hans7 False False False False False False test 5
 ./slurm-wrapper.sh clevr default False False False False False False test 5

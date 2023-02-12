@@ -43,7 +43,7 @@ class SlotAttention(nn.Module):
                         hidden_dim = 128,
                         max_slots=64, 
                         nunique_slots=8,
-                        beta=0.2,
+                        beta=0.75,
                         encoder_intial_res=(8, 8),
                         decoder_intial_res=(8, 8),
                         quantize=False,
@@ -56,7 +56,7 @@ class SlotAttention(nn.Module):
                         restart_cbstats=False,
                         implicit=True,
                         gumble=False,
-                        temperature=1.0,
+                        temperature=2.0,
                         kld_scale=1.0
                         ):
         super().__init__()
@@ -75,7 +75,7 @@ class SlotAttention(nn.Module):
         self.nunique_slots = nunique_slots
         self.quantize = quantize
         self.cov_binarize = cov_binarize
-        self.min_number_elements = 3 + 1
+        self.min_number_elements = 2
 
         assert self.num_slots <= np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
 
@@ -105,6 +105,7 @@ class SlotAttention(nn.Module):
 
         self.to_q = nn.Linear(dim, dim)
         self.to_v = nn.Linear(dim, dim)
+        self.to_k = nn.Linear(dim, dim)
 
         self.gru = nn.GRUCell(dim, dim)
 
@@ -117,14 +118,12 @@ class SlotAttention(nn.Module):
 
         self.norm_slots  = nn.LayerNorm(dim)
         self.norm_pre_ff = nn.LayerNorm(dim)
-
-
-        self.to_k = nn.Linear(dim, dim)
         self.norm_input  = nn.LayerNorm(dim)
+
+
 
         self.to_k_np = nn.Linear(dim, dim)
         self.norm_input_np  = nn.LayerNorm(dim)
-        
         self.encoder_norm_np = nn.LayerNorm([ntokens, dim])
         self.encoder_feature_mlp_np = nn.Sequential(nn.Linear(dim, dim),
                                             nn.ReLU(inplace=True),
@@ -187,11 +186,6 @@ class SlotAttention(nn.Module):
         features = slots.repeat((1, self.decoder_initial_res[0], self.decoder_initial_res[1], 1))
         features = self.decoder_position(features)
         return features.permute(0, 3, 1, 2)
-
-
-    def normalize(self, x, dim =1):
-        return (x - x.min(dim, keepdim=True)[0])/ \
-                (x.max(dim, keepdim=True)[0] - x.min(dim, keepdim=True)[0] + 0.0001)
 
 
     @torch.no_grad()
@@ -259,33 +253,10 @@ class SlotAttention(nn.Module):
         return torch.bmm(z, features)
 
 
-
-    def step(self, slots_prev, k , v):
-
-        slots = self.norm_slots(slots_prev)
-        q = self.to_q(slots)
-
-        dots = torch.einsum('bid,bjd->bij', q, k) * self.scale
-        attn = dots.softmax(dim=1) + self.eps
-        attn = attn / attn.sum(dim=-1, keepdim=True)
-
-        updates = torch.einsum('bjd,bij->bid', v, attn)
-        slots = self.gru(
-            updates.reshape(-1, self.dim),
-            slots_prev.reshape(-1, self.dim)
-        )
-
-        slots = slots.reshape(k.shape[0], -1, self.dim)
-        slots = slots + self.mlp(self.norm_pre_ff(slots))
-
-        return slots 
-
-
-
     def sample_slots(self, inputs, n_s, k, epoch = 0, batch = 0, images=None):
         b, d, w, h = inputs.shape
         qloss = torch.Tensor([0]).to(inputs.device)
-        cbidxs = torch.Tensor([[0]]).to(inputs.device)
+        cbidxs = torch.Tensor([[0]*n_s]*b).to(inputs.device)
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
         if self.quantize:
@@ -344,6 +315,7 @@ class SlotAttention(nn.Module):
             slot_sigma = self.slots_sigma.expand(b, n_s, -1)
             slot_sigma = torch.exp(0.5*slot_sigma)
 
+            # slots = torch.normal(slot_mu, slot_sigma)
             slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
                                                     device = slot_sigma.device, 
                                                     dtype = slot_sigma.dtype)
@@ -353,7 +325,7 @@ class SlotAttention(nn.Module):
 
 
     def forward(self, inputs, num_slots = None, epoch=0, batch= 0, train = True, images=None):
-        
+        b, d, w, h = inputs.shape
         n_s = num_slots if num_slots is not None else self.num_slots        
 
         # Compute Projections ========================
@@ -379,7 +351,25 @@ class SlotAttention(nn.Module):
 
         # Slot attention ===================
         for _ in range(self.iters):
-            slots = self.step(slots, k, v)
+            slots_prev = slots
+
+            slots = self.norm_slots(slots)
+            q = self.to_q(slots)
+
+
+            dots = torch.einsum('bid,bjd->bij', q, k) * self.scale
+            attn = dots.softmax(dim=1) + self.eps
+            attn = attn / attn.sum(dim=-1, keepdim=True)
+
+            updates = torch.einsum('bjd,bij->bid', v, attn)
+
+            slots = self.gru(
+                updates.reshape(-1, self.dim),
+                slots_prev.reshape(-1, self.dim)
+            )
+
+            slots = slots.reshape(b, -1, self.dim)
+            slots = slots + self.mlp(self.norm_pre_ff(slots))
 
 
         if self.implicit:          
@@ -506,7 +496,7 @@ class SlotAttentionAutoEncoder(nn.Module):
                         cb_qk=False,
                         eigen_quantizer=False,
                         restart_cbstats=False,
-                        implicit=True,
+                        implicit=False,
                         gumble=False,
                         temperature=1.0,
                         kld_scale=1.0
