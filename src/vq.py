@@ -228,8 +228,9 @@ class BaseVectorQuantizer(nn.Module):
         slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
                                                 device = slot_sigma.device, 
                                                 dtype = slot_sigma.dtype)
-        slots = quantized.view(shape) + slots.view(shape)
-        slot_mu = quantized.view(shape) + slot_mu.view(shape)
+        slots =  slots.view(shape) # + quantized.view(shape).clone().detach()
+        slot_mu = slot_mu.view(shape) # + quantized.view(shape).clone().detach()
+        
         slot_sigma = slot_sigma.view(shape)
         return slots, slot_mu, slot_sigma
 
@@ -599,7 +600,7 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
                                                 mean)
             
             # loss += get_cb_variance(self._embedding.weight)
-            print (f'feature: {inputs.max()}, qfeatures: {quantized.max()}, quant loss: {loss}, QKloss: {qkloss}, key: {torch.max(self._embedding.weight)}, mu: {torch.max(self.mu_embeddings.weight)}, sigma: {torch.max(self.sigma_embeddings.weight)}')
+            # print (f'feature: {inputs.max()}, qfeatures: {quantized.max()}, quant loss: {loss}, QKloss: {qkloss}, key: {torch.max(self._embedding.weight)}, mu: {torch.max(self.mu_embeddings.weight)}, sigma: {torch.max(self.sigma_embeddings.weight)}')
             loss += qkloss
 
 

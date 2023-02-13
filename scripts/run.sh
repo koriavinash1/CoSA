@@ -10,7 +10,7 @@ NAME=$9
 ITER=${10}
 
 NAME=$DATASET$VARIANT$NAME
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting4'
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting' # LOGSEuclidianNoKAllDatasets'
 python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --dataset_name $DATASET \
                                             --variant $VARIANT \
@@ -28,5 +28,3 @@ python /vol/biomedic3/agk21/testEigenSlots2/train.py \
 
 
 
-# sample script: Benckmark exp.
-# ./run.sh 8 4 64 0.99 8 0.0 True False False True False False False False bnmtest 3
