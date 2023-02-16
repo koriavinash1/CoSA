@@ -254,12 +254,12 @@ class SlotAttention(nn.Module):
 
 
     def sample_slots(self, inputs, n_s, k, epoch = 0, batch = 0, images=None):
-        b, d, w, h = inputs.shape
+        b, t, d = inputs.shape
         qloss = torch.Tensor([0]).to(inputs.device)
         cbidxs = torch.Tensor([[0]*n_s]*b).to(inputs.device)
         perplexity = torch.Tensor([[0]]).to(inputs.device)
 
-        # if self.restart_cbstats and (epoch % 2 == 1) and (batch == 0) and (epoch < 8): 
+        # if self.restart_cbstats and (epoch % 10 == 9) and (batch == 0) and (epoch < 50): 
         #     self.slot_quantizer.entire_cb_restart()
 
 
@@ -282,19 +282,19 @@ class SlotAttention(nn.Module):
 
             # Quantizing components----
             qloss1, _, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(objects, 
-                                                                loss_type = 0,
+                                                                loss_type = 1,
                                                                 update = self.restart_cbstats,
                                                                 reset_usage = (batch == 0))
             qloss += qloss1 
 
 
             # sample objects
-            with torch.no_grad():
-                k_, _, _, _, _, _, _  = self.slot_quantizer.sample(k,
-                                                            idxs=cbidxs)
+            # with torch.no_grad():
+            #     k, _, _, _, _, _, _  = self.slot_quantizer.sample(k,
+            #                                                 idxs=cbidxs)
 
         else:
-            qloss, k_, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(k, 
+            qloss, k, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(k, 
                                                 avg = False, 
                                                 loss_type = 1,
                                                 update = self.restart_cbstats,
@@ -308,7 +308,7 @@ class SlotAttention(nn.Module):
             slot_mu = slots.clone()
             cbidxs = cbidxs[:, :n_s]
 
-        return k_, slots, slot_mu, qloss, perplexity, cbidxs
+        return k, slots, slot_mu, qloss, perplexity, cbidxs
 
 
 
@@ -372,12 +372,9 @@ class SlotAttention(nn.Module):
             slots = self.step(slots.detach(), k, v)
 
         # update slots ===================
-        if self.quantize and self.cb_querykey:
-            qloss += F.mse_loss(slots_mu, slots.detach())
+        # if self.quantize and self.cb_querykey:
+        #     qloss += F.mse_loss(slots_mu, slots.detach())
         
-        if self.quantize:
-            qloss += F.mse_loss(a_np, slots.detach())
-
             
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
 

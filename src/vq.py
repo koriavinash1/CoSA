@@ -396,11 +396,11 @@ class BaseVectorQuantizer(nn.Module):
             
             qkloss += self.loss_fn(inputs.clone().detach(), mean.view(input_shape))
         else:
-            qkloss += get_cb_variance(self.mu_embeddings.weight)
+            # qkloss += get_cb_variance(self.mu_embeddings.weight)
             # qkloss += 0.001 * torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
 
             # kl loss between sampled marginal distributions
-            qkloss += torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
+            qkloss += 0 #torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
            
         return qkloss
 
@@ -474,7 +474,7 @@ class VectorQuantizer(BaseVectorQuantizer):
             if self.qk:
                 qkloss = self.compute_qkloss(final, encodings, inputs, avg, loss_type, logvar, mean)
             
-            loss += get_cb_variance(self._embedding.weight)
+            # loss += get_cb_variance(self._embedding.weight)
             loss += qkloss
 
 
@@ -561,28 +561,28 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
         # ===================================
         # Tricks to prevent codebook collapse---
         # Restart vectors
-        if update:
-            if np.random.uniform() > 0.99: self.random_restart()
-            if reset_usage: self.reset_usage()
+        # if update:
+        #     if np.random.uniform() > 0.99: self.random_restart()
+        #     if reset_usage: self.reset_usage()
 
 
-        # Reset unused cb vectors...
-        if update: self.update_usage(encoding_indices)
+        # # Reset unused cb vectors...
+        # if update: self.update_usage(encoding_indices)
 
 
         # Use EMA to update the embedding vectors
-        if self.training:
-            self._ema_cluster_size = self._ema_cluster_size * self._decay + \
-                                     (1 - self._decay) * torch.sum(encodings, 0)
+        # if self.training:
+        #     self._ema_cluster_size = self._ema_cluster_size * self._decay + \
+        #                              (1 - self._decay) * torch.sum(encodings, 0)
             
-            # Laplace smoothing of the cluster size
-            n = torch.sum(self._ema_cluster_size.data)
-            self._ema_cluster_size = ((self._ema_cluster_size + self._epsilon)
-                                / (n + self._num_embeddings * self._epsilon) * n)
+        #     # Laplace smoothing of the cluster size
+        #     n = torch.sum(self._ema_cluster_size.data)
+        #     self._ema_cluster_size = ((self._ema_cluster_size + self._epsilon)
+        #                         / (n + self._num_embeddings * self._epsilon) * n)
             
-            dw = torch.matmul(encodings.t(), flat_input)
-            self._ema_w = nn.Parameter(self._ema_w * self._decay + (1 - self._decay) * dw)
-            self._embedding.weight = nn.Parameter(self._ema_w / self._ema_cluster_size.unsqueeze(1))
+        #     dw = torch.matmul(encodings.t(), flat_input)
+        #     self._ema_w = nn.Parameter(self._ema_w * self._decay + (1 - self._decay) * dw)
+        #     self._embedding.weight = nn.Parameter(self._ema_w / self._ema_cluster_size.unsqueeze(1))
         
         # ============================
 
@@ -591,7 +591,7 @@ class VectorQuantizerEMA(BaseVectorQuantizer):
 
         if not (loss_type == 2):
             if self.qk:
-                qkloss = 0.01*self.compute_qkloss(final, 
+                qkloss = self.compute_qkloss(final, 
                                                 encodings, 
                                                 inputs, 
                                                 avg, 

@@ -10,7 +10,7 @@ NAME=$9
 ITER=${10}
 
 NAME=$DATASET$VARIANT$NAME
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting' # LOGSEuclidianNoKAllDatasets'
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting44'
 python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --dataset_name $DATASET \
                                             --variant $VARIANT \
