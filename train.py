@@ -323,6 +323,7 @@ def training_step(model, optimizer, epoch, opt):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
         recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, 
+                                                                                MCsamples = 2,
                                                                                 epoch=epoch, 
                                                                                 batch=ibatch)
         recon_loss_ = ((image - recon_combined)**2).mean()
@@ -382,6 +383,7 @@ def validation_step(model, optimizer, epoch, opt):
         global_step = epoch * val_epoch_size + ibatch
         image = sample['image'].to(device)
         recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, 
+                                                                                MCsamples = 10,
                                                                                 epoch=epoch, 
                                                                                 batch=ibatch)
 

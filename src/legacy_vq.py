@@ -110,7 +110,11 @@ class BaseVectorQuantizer(nn.Module):
             self._embedding.weight.requires_grad = True
 
 
-    def vq_sample(self, features, hard = False, idxs=None, final=False):
+    def vq_sample(self, features, 
+                        hard = False, 
+                        idxs=None, 
+                        MCsamples = 1, 
+                        final=False):
         input_shape = features.shape
         
         def _min_encoding_(distances):
@@ -153,7 +157,10 @@ class BaseVectorQuantizer(nn.Module):
         slot_mu = None; slot_sigma = None; slots = None
         # slot sampling
         if self.qk:
-            slots, slot_mu, slot_sigma = self.qkclass.sample_mu_sigma(quantized, encodings, input_shape)
+            slots, slot_mu, slot_sigma = self.qkclass.sample_mu_sigma(quantized, 
+                                                                        encodings, 
+                                                                        input_shape,
+                                                                        MCsamples=MCsamples)
 
 
         quantized = self.project_out(quantized)
@@ -165,6 +172,7 @@ class BaseVectorQuantizer(nn.Module):
     def gumble_sample(self, features, 
                         hard=False, 
                         idxs = None, 
+                        MCsamples = 1, 
                         final=False):
         
         input_shape = features.shape
@@ -201,8 +209,10 @@ class BaseVectorQuantizer(nn.Module):
         slot_mu = None; slot_sigma = None; slots = None
         # slot sampling
         if self.qk:
-            slots, slot_mu, slot_sigma = self.qkclass.sample_mu_sigma(quantized, encodings, input_shape)
-
+            slots, slot_mu, slot_sigma = self.qkclass.sample_mu_sigma(quantized, 
+                                                                        encodings, 
+                                                                        input_shape,
+                                                                        MCsamples=MCsamples)
 
         quantized = self.project_out(quantized)
         quantized = self.norm_out(quantized)
@@ -212,7 +222,8 @@ class BaseVectorQuantizer(nn.Module):
 
     def sample(self, features, 
                         hard=False, 
-                        idxs = None, 
+                        idxs = None,
+                        MCsamples = 1, 
                         from_train = False):
         if not from_train:
             features = self.project_in(features)
@@ -222,10 +233,12 @@ class BaseVectorQuantizer(nn.Module):
 
         if self.gumble:
             return self.gumble_sample(features, 
+                                        MCsamples=MCsamples,
                                         hard=hard, 
                                         idxs=idxs)
         else:
             return self.vq_sample(features, 
+                                    MCsamples=MCsamples,
                                     hard=hard, 
                                     idxs=idxs)
 
@@ -310,6 +323,7 @@ class VectorQuantizer(BaseVectorQuantizer):
                         update=False,
                         loss_type=0,
                         idxs=None,
+                        MCsamples = 1,
                         reset_usage=False):
         input_shape = inputs.shape
 
@@ -331,6 +345,7 @@ class VectorQuantizer(BaseVectorQuantizer):
         quantized, encoding_indices, encodings, slots, logits, logvar, mean  = self.sample(features, 
                                                                                             idxs=idxs, 
                                                                                             hard = True,
+                                                                                            MCsamples = MCsamples,
                                                                                             from_train=True)
 
 

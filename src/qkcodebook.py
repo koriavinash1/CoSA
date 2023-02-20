@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from einops import rearrange, repeat
 from src.utils import unique_sampling_fn, get_euclidian_distance, sorting_idxs, get_cosine_distance, get_cb_variance
 
 
@@ -12,7 +13,7 @@ class QKCodebook(nn.Module):
         nn.init.xavier_uniform_(self.mu_embeddings.weight)
         nn.init.xavier_uniform_(self.sigma_embeddings.weight)
 
-    def sample_mu_sigma(self, quantized, encodings, shape):
+    def sample_mu_sigma(self, quantized, encodings, shape, MCsamples=1):
         # quantized: quantized feature encodings MB*Ntokens x dim
         # encodings: encoded index MB*Ntokens x 1
         # shape: MB x Ntokens x dim
@@ -21,14 +22,17 @@ class QKCodebook(nn.Module):
         slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
         slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
 
-        # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=1)
-        slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
-                                                device = slot_sigma.device, 
-                                                dtype = slot_sigma.dtype)
-        slots =  slots.view(shape)
         slot_mu = slot_mu.view(shape)
-        
         slot_sigma = slot_sigma.view(shape)
+
+        # MC expectation estimation
+        sampling_shape = (slot_sigma.shape[0], MCsamples, slot_sigma.shape[1], slot_sigma.shape[2])  
+        slots = slot_mu.unsqueeze(1) + slot_sigma.unsqueeze(1) * torch.randn(sampling_shape, 
+                                                            device = slot_sigma.device, 
+                                                            dtype = slot_sigma.dtype)
+
+        # MC samples along batch axis.....
+        slots = rearrange(slots, 'b m n d -> (b m) n d')
         return slots, slot_mu, slot_sigma
 
 
