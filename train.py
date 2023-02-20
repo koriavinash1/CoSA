@@ -59,8 +59,6 @@ parser.add_argument('--cosine', default=False, type=str2bool, help='use geodesic
 parser.add_argument('--unique_sampling', default=False, type=str2bool, help='use unique sampling')
 
 
-parser.add_argument('--variational', type=str2bool, default=False)
-parser.add_argument('--binarize', type=str2bool, default=False)
 parser.add_argument('--eigen_noposition', type=str2bool, default=True)
 
 parser.add_argument('--overlap_weightage', type=float, default=0.0)
@@ -191,8 +189,6 @@ model = SlotAttentionAutoEncoder(resolution,
                                     opt.cb_decay,
                                     opt.encoder_res,
                                     opt.decoder_res,
-                                    opt.variational,
-                                    opt.binarize,
                                     opt.cb_qk,
                                     opt.eigen_quantizer,
                                     opt.restart_cbstats,
@@ -224,7 +220,6 @@ val_epoch_size = min(10000, len(val_dataloader))
 
 opt.log_interval = train_epoch_size // 5
 optimizer = optim.Adam(params, lr=opt.learning_rate)
-lrscheduler = ReduceLROnPlateau(optimizer, 'min')
 
 # criterion = nn.MSELoss()
 
@@ -432,6 +427,13 @@ def validation_step(model, optimizer, epoch, opt):
 
 start = time.time()
 min_recon_loss = 1000000.0
+counter = 0
+patience = 5
+lrscheduler = ReduceLROnPlateau(optimizer, 'min', 
+                                patience=patience,
+                                factor=0.5,
+                                verbose = True)
+
 
 for epoch in range(opt.num_epochs):
     model.train()
@@ -466,13 +468,25 @@ for epoch in range(opt.num_epochs):
 
     lrscheduler.step(validation_stats['recon_loss'])
     if min_recon_loss > validation_stats['recon_loss']:
+        counter = 0
         min_recon_loss = validation_stats['recon_loss']
         torch.save({
             'model_state_dict': model.state_dict(),
+            'optm_state_dict': optimizer.state_dict(),
             'epoch': epoch,
             'vstats': validation_stats,
             'tstats': training_stats, 
             }, os.path.join(opt.model_dir, f'discovery_best.pth'))
+    else:
+        counter +=1 
+        if counter > patience:
+            ckpt = torch.load(os.path.join(opt.model_dir, f'discovery_best.pth'))
+            model.load_state_dict(ckpt['model_state_dict'])
+        
+        if counter > 3*patience:
+            print('Early Stopping: --------------')
+            break
+
 
     torch.save({
         'model_state_dict': model.state_dict(),

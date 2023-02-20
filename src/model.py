@@ -3,7 +3,8 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from einops import rearrange
-from src.vq import VectorQuantizer, VectorQuantizerEMA
+from src.vq import VectorQuantizer 
+from src.legacy_vq import VectorQuantizer as legacy_quantizer
 from src.hpenalty import hessian_penalty
 from src.utils import compute_eigen
 from geomstats.geometry.hypersphere import Hypersphere
@@ -19,7 +20,7 @@ import torch.autograd as autograd
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-def reorder_slots(slots, slots_mu, cidxs, ns=10):
+def reorder_slots(slots, slots_mu, cidxs, scales = None, ns=10):
     # eigenvalues in decreasing order
     # cidxs are ordered wrt eigenvalues
 
@@ -28,10 +29,16 @@ def reorder_slots(slots, slots_mu, cidxs, ns=10):
         orig_slots = slots.clone()
         orig_slots_mu = slots_mu.clone()
         orig_idxs = cidxs.clone()
-        for _ in range(int(ns/N) + 1):
-            slots = torch.cat([slots, orig_slots[:, 1:, :]], 1)
-            slots_mu = torch.cat([slots_mu, orig_slots_mu[:, 1:, :]], 1)
-            cidxs = torch.cat([cidxs, orig_idxs[:, 1:]], 1)
+
+        for i in range(int(ns/N) + 1):
+            nunique_objects = -1
+            if not (scales is None):
+                nunique_objects = int((1.0*(scales > i + 1).sum(1)).mean().item())
+
+            slots = torch.cat([slots, orig_slots[:, 1:nunique_objects, :]], 1)
+            slots_mu = torch.cat([slots_mu, orig_slots_mu[:, 1:nunique_objects, :]], 1)
+            cidxs = torch.cat([cidxs, orig_idxs[:, 1:nunique_objects]], 1)
+
     return slots[:, :ns, :], slots_mu[:, :ns, :], cidxs[:, :ns]
 
 
@@ -43,16 +50,14 @@ class SlotAttention(nn.Module):
                         hidden_dim = 128,
                         max_slots=64, 
                         nunique_slots=8,
-                        beta=0.75,
+                        beta=0.0,
                         encoder_intial_res=(8, 8),
                         decoder_intial_res=(8, 8),
                         quantize=False,
                         cosine=False,
-                        cb_decay=0.99,
+                        cb_decay=0.8,
                         cb_querykey=False,
                         eigen_quantizer=False,
-                        cb_variational=False,
-                        cov_binarize=False,
                         restart_cbstats=False,
                         implicit=True,
                         gumble=False,
@@ -74,8 +79,9 @@ class SlotAttention(nn.Module):
         self.max_slots = max_slots
         self.nunique_slots = nunique_slots
         self.quantize = quantize
-        self.cov_binarize = cov_binarize
         self.min_number_elements = 2
+        self.beta = beta
+        legacy = True
 
         assert self.num_slots <= np.prod(encoder_intial_res), f'reduce number of slots, max possible {np.prod(encoder_intial_res)}'
 
@@ -132,31 +138,34 @@ class SlotAttention(nn.Module):
 
         # ===================================
         if self.quantize:
-            if cb_decay > 0.0:
-                self.slot_quantizer = VectorQuantizerEMA(max_slots,
-                                                    self.dim,
-                                                    self.dim,
-                                                    commitment_cost=beta,
-                                                    decay=cb_decay,
-                                                    cosine=cosine,
-                                                    variational=cb_variational,
-                                                    qk=self.cb_querykey,
-                                                    gumble=gumble,
-                                                    temperature=temperature,
-                                                    kld_scale=kld_scale)
-                print ('VQVAE MODEL EMA', cb_decay, gumble)
+            if not legacy:
+                self.slot_quantizer = VectorQuantizer(
+                                                self.dim, # ntokens,
+                                                max_slots,
+                                                codebook_dim = 8, # self.dim, # ntokens,
+                                                nhidden = self.dim,
+                                                decay = cb_decay,
+                                                
+                                                kmeans_init = True,
+                                                kmeans_iters = 10,
+                                                use_cosine_sim = cosine,
+                                                qk_codebook = self.cb_querykey,
+                                                sample_codebook_temp = temperature,
+                                                commitment_weight = 0.0,
+                                              )
+                print ('VQVAE model', cb_decay, cosine, self.dim)
             else:
-                self.slot_quantizer = VectorQuantizer(max_slots,
-                                                    self.dim,
-                                                    self.dim,
-                                                    commitment_cost=beta,
-                                                    cosine=cosine,
-                                                    variational=cb_variational,
-                                                    qk=self.cb_querykey,
-                                                    gumble=gumble,
-                                                    temperature=temperature,
-                                                    kld_scale=kld_scale)
-                print ('VQVAE model', cb_decay, gumble)
+                self.slot_quantizer = legacy_quantizer(num_embeddings = max_slots, 
+                                                        embedding_dim = self.dim, # ntokens,
+                                                        codebook_dim = 32,
+                                                        nhidden = self.dim,
+                                                        commitment_cost = self.beta,
+                                                        decay = cb_decay,
+                                                        qk=self.cb_querykey,
+                                                        cosine= cosine,
+                                                        gumble=gumble,
+                                                        temperature=temperature
+                                                        )
         else:         
             self.slots_mu    = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
             self.slots_sigma = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, 1, dim)))
@@ -196,15 +205,36 @@ class SlotAttention(nn.Module):
         coveriance_matrix = torch.einsum('bkf, bgf -> bkg', x, x)
 
         # eigen vectors are arranged in ascending order of their eigen values
-        eigen_values, eigen_vectors = torch.symeig(coveriance_matrix, eigenvectors=True)
+        # eigen_values, eigen_vectors = torch.symeig(coveriance_matrix, eigenvectors=True)
+        eigen_values, eigen_vectors = torch.linalg.eigh(coveriance_matrix)
 
         eigen_vectors = eigen_vectors.permute(0, 2, 1)        
 
         eigen_vectors = torch.flip(eigen_vectors, [1])
         eigen_values = torch.flip(eigen_values, [1])
 
+        # Sign ambiguity
+        for k in range(eigen_vectors.shape[0]):
+            mean_vector = torch.mean((eigen_vectors[:, k] > 0).float(), -1)
+            idxs = (mean_vector > 0.5)*(mean_vector < 1.0)
+            # reverse segment
+            eigen_vectors[idxs, k] = 0 - eigen_vectors[idxs, k]
 
         return eigen_vectors, eigen_values
+
+
+    def svd_spectral_decomposition(self, x):
+        # x: token embeddings B x ntokens x token_embeddings
+
+        x = F.normalize(x, p=2, dim=-1)
+
+        u, s, v = torch.linalg.svd(x)
+        
+        print(x.shape, u.shape, s.shape, v.shape, '========================')
+        import pdb;pdb.set_trace()
+
+
+
 
 
     def extract_eigen_basis(self, features, batch=None):
@@ -231,7 +261,7 @@ class SlotAttention(nn.Module):
         batched_scale = torch.cat(batched_scale, 0).to(features.device)
         batched_concepts = torch.cat(batched_concepts, 0).to(features.device)
         
-        batched_concepts = batched_concepts.softmax(dim = -1) + self.eps
+        batched_concepts = batched_concepts.softmax(dim = -1) 
 
         batched_concepts = torch.flip(batched_concepts, [1])
         batched_scale = torch.flip(batched_scale, [1])
@@ -250,65 +280,43 @@ class SlotAttention(nn.Module):
 
         # projection = features*z
         # return torch.sum(projection, 2)
+
         return torch.bmm(z, features)
 
 
-    def sample_slots(self, inputs, n_s, k, epoch = 0, batch = 0, images=None):
-        b, t, d = inputs.shape
-        qloss = torch.Tensor([0]).to(inputs.device)
-        cbidxs = torch.Tensor([[0]*n_s]*b).to(inputs.device)
-        perplexity = torch.Tensor([[0]]).to(inputs.device)
 
-        # if self.restart_cbstats and (epoch % 10 == 9) and (batch == 0) and (epoch < 50): 
-        #     self.slot_quantizer.entire_cb_restart()
+    def feature_abstraction(self, inputs):
+        # Compute Principle directions and scale
+        eigen_basis, eigen_values = self.passthrough_eigen_basis(inputs.clone().detach())
+        # eigen_basis, eigen_values = self.svd_spectral_decomposition(inputs.clone().detach())
+        # eigen_basis, eigen_values = self.extract_eigen_basis(inputs, batch=images)
 
+        eigen_values = torch.round(eigen_values)
+        nunique_objects = max(3, int((1.0*(eigen_values > 0).sum(1)).mean().item()))
 
-        if self.eigen_quantizer:
-            # Compute Principle directions and scale
-
-            eigen_basis, eigen_values = self.passthrough_eigen_basis(k.clone().detach())
-            # eigen_basis, eigen_values = self.extract_eigen_basis(k, batch=images)
-
-            eigen_values = torch.round(eigen_values)
-            nunique_objects = max(3, int((1.0*(eigen_values > 0).sum(1)).mean().item()))
-
-            # Principle components
-            objects = self.masked_projection(k, eigen_basis)   
-            objects = objects[:, :nunique_objects, :]
-
-            # context loss
-            # qloss += F.mse_loss(objects.mean(1), k.mean(1))
+        # Principle components
+        objects = self.masked_projection(inputs, eigen_basis)   
+        objects = objects[:, :nunique_objects, :]
+        return objects, eigen_values[:, :nunique_objects]
 
 
-            # Quantizing components----
-            qloss1, _, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(objects, 
-                                                                loss_type = 1,
-                                                                update = self.restart_cbstats,
-                                                                reset_usage = (batch == 0))
-            qloss += qloss1 
+    def sample_slots(self, n_s, k, epoch = 0, batch = 0, images=None):
 
-
-            # sample objects
-            # with torch.no_grad():
-            #     k, _, _, _, _, _, _  = self.slot_quantizer.sample(k,
-            #                                                 idxs=cbidxs)
-
-        else:
-            qloss, k, perplexity, cbidxs, slots, slot_mu = self.slot_quantizer(k, 
-                                                avg = False, 
-                                                loss_type = 1,
-                                                update = self.restart_cbstats,
-                                                reset_usage = (batch == 0))
+        if self.eigen_quantizer: objects, scales = self.feature_abstraction(k)                       
+        else: objects = k
         
-
+        # Quantizing components----
+        qobjects, cbidxs, qloss, perplexity, slots, slot_mu  = self.slot_quantizer(objects, 
+                                                                    loss_type = 1,
+                                                                    update = self.restart_cbstats,
+                                                                    reset_usage = (batch == 0))
+        
         if self.cb_querykey: 
-            slots, slot_mu, cbidxs = reorder_slots(slots, slot_mu, cbidxs, n_s)
+            slots, qobjects, cbidxs = reorder_slots(slots, qobjects, cbidxs, scales, n_s)
         else: 
-            slots = objects[:, :n_s, :]
-            slot_mu = slots.clone()
-            cbidxs = cbidxs[:, :n_s]
+            slots = objects[:, :n_s, :]; qobjects = slots.clone(); cbidxs = cbidxs[:, :n_s]
 
-        return k, slots, slot_mu, qloss, perplexity, cbidxs
+        return slots, qobjects, qloss, perplexity, cbidxs
 
 
 
@@ -321,18 +329,22 @@ class SlotAttention(nn.Module):
         inputs_features = self.encoder_transformation(inputs, position = True)
         inputs_features = self.norm_input(inputs_features)
 
+
+        # Sample Slots ========================
         if self.quantize:
             inputs_features_np = self.encoder_transformation(inputs, position = False)
             inputs_features_np = self.norm_input_np(inputs_features_np)
-            a_np = self.to_k_np(inputs_features_np)
+            k_np = self.to_k_np(inputs_features_np)
 
             
-            # Sample Slots ========================
-            a_np, slots, slots_mu, qloss, perplexity, cbidxs = self.sample_slots(inputs_features_np, 
-                                                                                n_s, a_np, 
-                                                                                epoch, batch, images)
+            slots, objects, qloss, perplexity, cbidxs = self.sample_slots(n_s, k_np, 
+                                                                    epoch, batch, images)
 
         else:
+            qloss = torch.Tensor([0]).to(inputs.device)
+            cbidxs = torch.Tensor([[0]*n_s]*b).to(inputs.device)
+            perplexity = torch.Tensor([[0]]).to(inputs.device)
+
             slot_mu = self.slots_mu.expand(b, n_s, -1)
             slot_sigma = self.slots_sigma.expand(b, n_s, -1)
             slot_sigma = torch.exp(0.5*slot_sigma)
@@ -340,12 +352,15 @@ class SlotAttention(nn.Module):
             slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
                                                     device = slot_sigma.device, 
                                                     dtype = slot_sigma.dtype)
-    
+        
+
+        # Key-Value projection vectors ====================
 
         k = self.to_k(inputs_features)
         v = self.to_v(inputs_features)
 
-        # Slot attention ===================
+
+        # Slot attention =========================
         for _ in range(self.iters):
             slots_prev = slots
 
@@ -368,15 +383,16 @@ class SlotAttention(nn.Module):
             slots = slots + self.mlp(self.norm_pre_ff(slots))
 
 
-        if self.implicit:          
-            slots = self.step(slots.detach(), k, v)
+        if self.implicit: slots = self.step(slots.detach(), k, v)
 
         # update slots ===================
-        # if self.quantize and self.cb_querykey:
-        #     qloss += F.mse_loss(slots_mu, slots.detach())
-        
+        if self.quantize and self.cb_querykey:
+            qloss += F.mse_loss(objects, slots.detach())
             
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
+
+
+
 
 
 def build_grid(resolution):
@@ -387,6 +403,7 @@ def build_grid(resolution):
     grid = np.expand_dims(grid, axis=0)
     grid = grid.astype(np.float32)
     return torch.from_numpy(np.concatenate([grid, 1.0 - grid], axis=-1)).to(device)
+
 
 
 """Adds soft positional embedding with learnable projection."""
@@ -488,8 +505,6 @@ class SlotAttentionAutoEncoder(nn.Module):
                         cb_decay=0.99,
                         encoder_res=4,
                         decoder_res=4,
-                        variational=False, 
-                        binarize=False,
                         cb_qk=False,
                         eigen_quantizer=False,
                         restart_cbstats=False,
@@ -527,8 +542,6 @@ class SlotAttentionAutoEncoder(nn.Module):
             cb_decay=cb_decay,
             encoder_intial_res=(encoder_res, encoder_res),
             decoder_intial_res=(decoder_res, decoder_res),
-            cb_variational=variational,
-            cov_binarize=binarize,
             cb_querykey=cb_qk,
             eigen_quantizer=eigen_quantizer,
             restart_cbstats=restart_cbstats,
@@ -674,46 +687,6 @@ class SlotAttentionClassifier(nn.Module):
     return predictions, cbidxs, qloss, perplexity
 
 
-    def _transform_attrs(self, attrs):
-        """
-        receives the attribute predictions and binarizes them by computing the argmax per attribute group
-        :param attrs: 3D Tensor, [batch, n_slots, n_attrs] attribute predictions for a batch.
-        :return: binarized attribute predictions
-        """
-        presence = attrs[:, :, 0]
-        attrs_trans = attrs[:, :, 1:]
-
-        # threshold presence prediction, i.e. where is an object predicted
-        presence = presence < 0.5
-
-        # flatten first two dims
-        attrs_trans = attrs_trans.view(1, -1, attrs_trans.shape[2]).squeeze()
-        # binarize attributes
-        # set argmax per attr to 1, all other to 0, s.t. only zeros and ones are contained within graph
-        # NOTE: this way it is not differentiable!
-        bin_attrs = torch.zeros(attrs_trans.shape, device=self.device)
-        for i in range(len(self.category_ids) - 1):
-            # find the argmax within each category and set this to one
-            bin_attrs[range(bin_attrs.shape[0]),
-                      # e.g. x[:, 0:(3+0)], x[:, 3:(5+3)], etc
-                      (attrs_trans[:,
-                       self.category_ids[i]:self.category_ids[i + 1]].argmax(dim=1) + self.category_ids[i]).type(
-                          torch.LongTensor)] = 1
-
-        # reshape back to batch x n_slots x n_attrs
-        bin_attrs = bin_attrs.view(attrs.shape[0], attrs.shape[1], attrs.shape[2] - 1)
-
-        # add coordinates back
-        bin_attrs[:, :, :3] = attrs[:, :, 1:4]
-
-        # redo presence zeroing
-        bin_attrs[presence, :] = 0
-
-        return bin_attrs
-
-
-
-
 
 class ReasoningAttention(nn.Module):
     def __init__(self, nconcepts, cdim):
@@ -839,23 +812,7 @@ class SlotAttentionReasoning(nn.Module):
         # `slots` has shape: [batch_size, num_slots, slot_size].
         # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
 
-        x = self.decoder_cnn(features)
-        x = x.permute(0, 2, 3, 1)
-        # `x` has shape: [batch_size*num_slots, width, height, num_channels+1].
 
-        # Undo combination of slot and batch dimension; split alpha masks.
-        recons, masks = x.reshape(image.shape[0], -1, x.shape[1], x.shape[2], x.shape[3]).split([3,1], dim=-1)
-        # `recons` has shape: [batch_size, num_slots, width, height, num_channels].
-        # `masks` has shape: [batch_size, num_slots, width, height, 1].
-
-        # Normalize alpha masks over slots.
-        masks = nn.Softmax(dim=1)(masks)
-        recon_combined = torch.sum(recons * masks, dim=1)  # Recombine image.
-        recon_combined = recon_combined.permute(0,3,1,2)
-        # `recon_combined` has shape: [batch_size, width, height, num_channels].
-
-
-        predictions = self.mlp_classifier(slots)
         res_cb_samples = self.reasoning_attention(self.slot_attention.slot_quantizer._embedding.weight,
                                                         cbidxs)
         logits = self.reasoning_classifier(res_cb_samples)

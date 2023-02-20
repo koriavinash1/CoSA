@@ -1,614 +1,509 @@
+# updated on https://github.com/lucidrains/vector-quantize-pytorch codebase
+
+
 import torch
-import torch.nn as nn
+from torch import nn, einsum
 import torch.nn.functional as F
-from torch.distributions import Normal
+import torch.distributed as distributed
+from torch.cuda.amp import autocast
 
-from torch.autograd import Variable
-import torchvision.models as models
-import numpy as np
-
-import geomstats.backend as gs
-from geomstats.geometry.hypersphere import Hypersphere
-from einops import rearrange
-from src.hpenalty import hessian_penalty
-
-from torch.distributions import Categorical
+from src.qkcodebook import QKCodebook
+from einops import rearrange, repeat
+from src.utils import *
 
 
-def unique_sampling_fn(distances, nunique=-1):
-    # distance: Bxntokensxncbtokens
-
-    B, S, N = distances.shape
-    if not (isinstance(nunique, list) or isinstance(nunique, np.ndarray)):
-        if (nunique == -1): 
-            nunique = min(S, N)
-        nunique = [nunique]*B
-    
-    nunique = np.minimum(nunique, N)
-    batch_sampled_vectors = []
-    for b in range(B):
-        distance_vector = distances[b, ...]
-        sorted_idx = torch.argsort(distance_vector, dim=-1, descending=False)
-        # Create a bin over codebook direction of distance vectors
-        # with nunique bins and sample based on that...
-        # 
-        #  
-        sampled_vectors = []
-        sampled_distances = []
-        for i in range(S):
-
-            if i < nunique[b]:
-                for k in range(N):
-                    current_idx = sorted_idx[i, k]
-                    if not (current_idx in sampled_vectors):
-                        sampled_vectors.append(current_idx.unsqueeze(0))
-                        sampled_distances.append(distance_vector[i, current_idx].unsqueeze(0))
-                        break
-            else:
-                current_idx = sorted_idx[i, 0]
-                sampled_vectors.append(current_idx.unsqueeze(0))
-                sampled_distances.append(distance_vector[i, current_idx].unsqueeze(0))
- 
-        
-        sampled_vectors = torch.cat(sampled_vectors, 0)
-        sampled_distances = torch.cat(sampled_distances, 0)
-        sampled_vectors = sampled_vectors[torch.argsort(sampled_distances, descending=False)]
-        batch_sampled_vectors.append(sampled_vectors.unsqueeze(0))
-
-    batch_sampled_vectors = torch.cat(batch_sampled_vectors, 0)
-    return batch_sampled_vectors.view(-1)
-
-    
-def get_euclidian_distance(u, v):
-    # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-    d = torch.sum(u**2, dim=1, keepdim=True) + \
-        torch.sum(v**2, dim=1) - 2 * torch.matmul(u, v.t())
-    return d
-
-
-
-def sorting_idxs(quantized, cidxs):
-    B, N, _ = quantized.shape
-
-    batch_sampled_vectors = []
-    for b in range(B):
-        sampled_idxs = cidxs[b, ...]
-
-        st_pointer = -1
-        end_pointer = 0
-        unique = torch.zeros_like(sampled_idxs)
-        for unique_idx in torch.sort(torch.unique(sampled_idxs)):
-            idxs = torch.argwhere(sampled_idxs == unique_idx)
-            
-            st_pointer += 1
-            end_pointer -= len(idxs[1:])
-
-            unique[st_pointer] = idxs[0]
-            unique_idx[end_pointer : end_pointer + len(idxs[1:])] = idxs[1:]
-
-            pass 
-
-
-    return quantized, cidxs
-
-
-def get_cosine_distance(u, v):
-    # distance on sphere
-    d = torch.einsum('bd,dn->bn', u, rearrange(v, 'n d -> d n'))
-    ed1 = torch.sqrt(torch.sum(u**2, dim=1, keepdim=True))
-    ed2 = torch.sqrt(torch.sum(v**2, dim=1, keepdim=True))
-    ed3 = torch.einsum('bd,dn->bn', ed1, rearrange(ed2, 'n d  -> d n'))
-    geod = torch.clamp(d/(ed3), min=-0.99999, max=0.99999)
-    return torch.acos(torch.abs(geod))/(2.0*np.pi)
-
-
-def get_cb_variance(cb):
-    # cb = cb / (1e-5 + torch.norm(cb, dim=1, keepdim=True))
-    cd = get_cosine_distance(cb, cb)
-    return 1 - torch.mean(torch.var(cd, 1)) 
-
-
-class BaseVectorQuantizer(nn.Module):
-    def __init__(self, num_embeddings, 
-                        embedding_dim,
-                        nhidden,
-                        commitment_cost=0.25,
-                        usage_threshold=1.0e-9,
-                        variational=False,
-                        qk=False,
-                        cosine=False,
-                        gumble=False,
-                        temperature=1.0,
-                        kld_scale=1.0):
+# distance types
+class EuclideanCodebook(nn.Module):
+    def __init__(
+        self,
+        dim,
+        codebook_size,
+        nhidden=128,
+        num_codebooks = 1,
+        kmeans_init = False,
+        kmeans_iters = 10,
+        sync_kmeans = True,
+        decay = 0.8,
+        eps = 1e-5,
+        qk_codebook = False,
+        threshold_ema_dead_code = 2,
+        use_ddp = False,
+        learnable_codebook = False,
+        sample_codebook_temp = 0
+    ):
         super().__init__()
-        self._embedding_dim = embedding_dim
-        self._num_embeddings = num_embeddings
-        self._commitment_cost = commitment_cost
-        self._usage_threshold = usage_threshold
-        self.variational = variational
-        self._cosine = cosine
-        self.qk=qk
+        self.decay = decay
+        init_fn = uniform_init if not kmeans_init else torch.zeros
+        embed = init_fn(num_codebooks, codebook_size, dim)
+
+        self.codebook_size = codebook_size
+        self.num_codebooks = num_codebooks
+
+        self.kmeans_iters = kmeans_iters
+        self.eps = eps
+        self.threshold_ema_dead_code = threshold_ema_dead_code
+        self.sample_codebook_temp = sample_codebook_temp
+
+        assert not (use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
+
+        self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
+        self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
+        self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
+
+        self.register_buffer('initted', torch.Tensor([not kmeans_init]))
+        self.register_buffer('cluster_size', torch.zeros(num_codebooks, codebook_size))
+        self.register_buffer('embed_avg', embed.clone())
+
+        self.learnable_codebook = learnable_codebook
+        if learnable_codebook:
+            self.embed = nn.Parameter(embed)
+        else:
+            self.register_buffer('embed', embed)
 
 
-        self.proj = nn.Linear(nhidden, embedding_dim)
-        self._embedding = nn.Embedding(self._num_embeddings, self._embedding_dim)
-        self._embedding.weight.data.uniform_(-1/self._num_embeddings, 1/self._num_embeddings)
-        self._get_distance = get_euclidian_distance
-        self.loss_fn = F.mse_loss
-        
-        self.norm_input  = nn.LayerNorm(self._embedding_dim)
+        self.qk = qk_codebook
+        if self.qk:
+            self.qkclass = QKCodebook(nhidden, codebook_size)
 
-        if self._cosine:
-            sphere = Hypersphere(dim=self._embedding_dim - 1)
-            points_in_manifold = torch.Tensor(sphere.random_uniform(n_samples=self._num_embeddings))
-            self._embedding.weight.data.copy_(points_in_manifold)
-            self._get_distance = get_cosine_distance
-            self.loss_fn = F.mse_loss # lambda x1,x2: 2.0*(1 - F.cosine_similarity(x1, x2).mean())
+
+    @torch.jit.ignore
+    def init_embed_(self, data):
+        if self.initted:
+            return
+
+        embed, cluster_size = kmeans(
+            data,
+            self.codebook_size,
+            self.kmeans_iters,
+            sample_fn = self.sample_fn,
+            all_reduce_fn = self.kmeans_all_reduce_fn
+        )
+
+        self.embed.data.copy_(embed)
+        self.embed_avg.data.copy_(embed.clone())
+        self.cluster_size.data.copy_(cluster_size)
+        self.initted.data.copy_(torch.Tensor([True]))
+
+    def replace(self, batch_samples, batch_mask):
+        for ind, (samples, mask) in enumerate(zip(batch_samples.unbind(dim = 0), batch_mask.unbind(dim = 0))):
+            if not torch.any(mask):
+                continue
+
+            sampled = self.sample_fn(rearrange(samples, '... -> 1 ...'), mask.sum().item())
+            self.embed.data[ind][mask] = rearrange(sampled, '1 ... -> ...')
+
+    def expire_codes_(self, batch_samples):
+        if self.threshold_ema_dead_code == 0:
+            return
+
+        expired_codes = self.cluster_size < self.threshold_ema_dead_code
+
+        if not torch.any(expired_codes):
+            return
+
+        batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
+        self.replace(batch_samples, batch_mask = expired_codes)
+
+    @autocast(enabled = False)
+    def forward(self, x):
+        needs_codebook_dim = x.ndim < 4
+        input_shape = x.shape
+
+
+        x = x.float()
+
+        if needs_codebook_dim:
+            x = rearrange(x, '... -> 1 ...')
+
+        shape, dtype = x.shape, x.dtype
+        flatten = rearrange(x, 'h ... d -> h (...) d')
+
+        self.init_embed_(flatten)
+
+        embed = self.embed if not self.learnable_codebook else self.embed.detach()
+
+        dist = -torch.cdist(flatten, embed, p = 2)
+
+        embed_ind = gumbel_sample(dist, dim = -1, temperature = self.sample_codebook_temp)
+        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
+        embed_ind = embed_ind.view(*shape[:-1])
+
+        quantize = batched_embedding(embed_ind, self.embed)
+
+        if self.training:
+            cluster_size = embed_onehot.sum(dim = 1)
+
+            self.all_reduce_fn(cluster_size)
+            self.cluster_size.data.lerp_(cluster_size, 1 - self.decay)
+
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+            self.all_reduce_fn(embed_sum.contiguous())
+            self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
+
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+
+            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+            self.embed.data.copy_(embed_normalized)
+            self.expire_codes_(x)
+
+        if needs_codebook_dim:
+            quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
 
         if self.qk:
-            self.mu_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
-            self.sigma_embeddings = nn.Embedding(self._num_embeddings, self._embedding_dim)
-            nn.init.xavier_uniform_(self.mu_embeddings.weight)
-            nn.init.xavier_uniform_(self.sigma_embeddings.weight)
-            # nn.init.constant_(self.sigma_embeddings.weight, 0)
+            slots, slots_mu, slots_logvar = self.qkclass.sample_mu_sigma(quantize,
+                                                                            embed_onehot,
+                                                                            input_shape)
+            return quantize, embed_ind, slots, slots_mu, slots_logvar
 
-        self.data_mean = 0
-        self.data_std = 0
-
-        self.register_buffer('_usage', torch.ones(self._num_embeddings), persistent=False)
-        self.get_variance = lambda: get_cb_variance(self._embedding.weight) 
+        return quantize, embed_ind
 
 
 
-        self.kld_scale = kld_scale
 
+class CosineSimCodebook(nn.Module):
+    def __init__(
+        self,
+        dim,
+        codebook_size,
+        nhidden=128,
+        num_codebooks = 1,
+        kmeans_init = False,
+        kmeans_iters = 10,
+        sync_kmeans = True,
+        decay = 0.8,
+        eps = 1e-5,
+        qk_codebook = False,
+        threshold_ema_dead_code = 2,
+        use_ddp = False,
+        learnable_codebook = False,
+        sample_codebook_temp = 0.
+    ):
+        super().__init__()
+        self.decay = decay
 
-        # ======================
-        # Gumble parameters
-        self.gumble = gumble
-        if self.gumble:
-            self.temperature = temperature
-            self.gumble_proj = nn.Sequential(
-                                    nn.Linear(nhidden, num_embeddings),
-                                    nn.ReLU())
-            if self.qk:
-                self.gumble_slot_proj = nn.Sequential(
-                                    nn.Linear(nhidden, num_embeddings),
-                                    nn.ReLU())
-
-
-    def update_usage(self, min_enc):
-        self._usage[min_enc] = self._usage[min_enc] + 1  # if code is used add 1 to usage
-        self._usage /= 2 # decay all codes usage
-
-    def reset_usage(self):
-        self._usage.zero_() #  reset usage between epochs
-
-
-    def random_restart(self):
-        #  randomly restart all dead codes below threshold with random code in codebook
-        dead_codes = torch.nonzero(self._usage < self._usage_threshold).squeeze(1)
-        useful_codes = torch.nonzero(self._usage > self._usage_threshold).squeeze(1)
-        N = self.data_std.shape[0]
-
-        if len(dead_codes) > 0:
-            eps = torch.randn((len(dead_codes), self._embedding_dim)).to(self._embedding.weight.device)
-            rand_codes = eps*self.data_std.unsqueeze(0).repeat(len(dead_codes), 1) +\
-                                self.data_mean.unsqueeze(0).repeat(len(dead_codes), 1)
-
-            with torch.no_grad():
-                self._embedding.weight[dead_codes] = rand_codes
-                self.mu_embeddings.weight[dead_codes] = rand_codes
-
-
-            self._embedding.weight.requires_grad = True
-            self.mu_embeddings.weight.requires_grad = True
-
-    def entire_cb_restart(self):
-        N = self.data_std.shape[0]
-        eps = torch.randn((self._num_embeddings, self._embedding_dim)).to(self._embedding.weight.device)
-        rand_codes = eps*self.data_std.unsqueeze(0).repeat(len(eps), 1) +\
-                                self.data_mean.unsqueeze(0).repeat(len(eps), 1)
-
-
-        with torch.no_grad():
-            self._embedding.weight[:] = rand_codes
-            self.mu_embeddings.weight[:] = rand_codes
-
-        self._embedding.weight.requires_grad = True
-        self.mu_embeddings.weight.requires_grad = True
-
-
-
-    def sample_mu_sigma_given_encodings(self, quantized, encodings, shape):
-        slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
-        slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
-
-        # slot_sigma = torch.clamp(torch.exp(0.5*slot_sigma), min=1e-3, max=1)
-        slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
-                                                device = slot_sigma.device, 
-                                                dtype = slot_sigma.dtype)
-        slots =  slots.view(shape) # + quantized.view(shape).clone().detach()
-        slot_mu = slot_mu.view(shape) # + quantized.view(shape).clone().detach()
-        
-        slot_sigma = slot_sigma.view(shape)
-        return slots, slot_mu, slot_sigma
-
-
-    def vq_sample(self, features, st = False, idxs=None, final=False):
-        input_shape = features.shape
-        
-        # update data stats
-        if not st:
-            self.data_mean = 0.9*self.data_mean + 0.1*features.clone().detach().mean(1).mean(0)
-            self.data_std = 0.9*self.data_std + 0.1*features.clone().detach().std(1).mean(0)
-
-
-        def _min_encoding_(distances):
-            # encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
-            sampled_dist, encoding_indices = torch.min(distances, dim=1)
-            encoding_indices = encoding_indices.view(input_shape[0], -1)
-            sampled_dist = sampled_dist.view(input_shape[0], -1)
-
-            # import pdb;pdb.set_trace()
-            encoding_indices = encoding_indices.view(-1)
-            # encoding_indices = encoding_indices[torch.argsort(sampled_dist, dim=1, descending=False).view(-1)]
-            encoding_indices = encoding_indices.unsqueeze(1)
-            return encoding_indices
-
-        # Flatten features
-        features = features.view(-1, self._embedding_dim)
-
-
-        # Update prior with previosuly wrt principle components
-        # This will ensure that codebook indicies that are not in idxs wont be sampled
-        # hacky way need to find a better way of implementing this
-        key_codebook = self._embedding.weight.clone()
-        if not (idxs is None):
-            idxs = torch.unique(idxs).reshape(-1, 1)
-            for i in range(self._num_embeddings):
-                if not (i in idxs): 
-                    key_codebook[i, :] = 2*torch.max(features) 
-
-
-        # Quantize and unflatten
-        distances = self._get_distance(features, key_codebook)
-        encoding_indices = _min_encoding_(distances)
-
-        encodings = torch.zeros(encoding_indices.shape[0], self._num_embeddings, device=features.device)
-        encodings.scatter_(1, encoding_indices, 1)
-
-        quantized = torch.matmul(encodings, self._embedding.weight)
-        slot_mu = None; slot_sigma = None
-
-        slots = None
-        # slot sampling
-        if self.qk and (not final):
-            slots, slot_mu, slot_sigma = self.sample_mu_sigma_given_encodings(quantized, encodings, input_shape)
-
-        return quantized.view(input_shape), encoding_indices, encodings, slots, None, slot_sigma, slot_mu
-
-
-    def gumble_sample(self, features, 
-                        st=False, idxs = None, 
-                        final=False):
-        
-        input_shape = features.shape
-
-        # force hard = True when we are in eval mode, as we must quantize
-        hard = st if self.training else True
-
-
-        # update data stats
-        if not st:
-            self.data_mean = 0.9*self.data_mean + 0.1*features.clone().detach().mean(1).mean(0)
-            self.data_std = 0.9*self.data_std + 0.1*features.clone().detach().std(1).mean(0)
-
-
-        logits = self.gumble_proj(features)
-        
-        # Update prior with previosuly wrt principle components
-        if not (idxs is None):
-            mask_idxs = torch.zeros_like(logits)
-
-            for b in range(input_shape[0]):
-                mask_idxs[b, :, idxs[b]] = 1
-            logits = mask_idxs*logits
-
-        soft_one_hot = F.gumbel_softmax(logits, tau=self.temperature, dim=1, hard=hard)
-        quantized = torch.einsum('b t k, k d -> b t d', soft_one_hot, self._embedding.weight)            
-
-
-        encoding_indices = soft_one_hot.argmax(dim=-1).view(-1, 1)
-        encodings = torch.zeros(encoding_indices.shape[0], self._num_embeddings, device=features.device)
-        encodings.scatter_(1, encoding_indices, 1)
-        slot_mu = None; slot_sigma = None
-
-
-        slots = None
-        # slot sampling
-        if self.qk and (not final):
-            slots, slot_mu, slot_sigma = self.sample_mu_sigma_given_encodings(quantized, encodings, input_shape)
-
-       
-        return quantized, encoding_indices, encodings, slots, logits, slot_sigma, slot_mu
-
-
-
-    def sample(self, features, 
-                        st=False, 
-                        idxs = None, 
-                        final=False,
-                        from_train = False):
-        if not from_train:
-            features = self.proj(features)
-            # layer norm on features
-            features = self.norm_input(features)
-
-        if self.gumble:
-            return self.gumble_sample(features, st=st, idxs=idxs, 
-                                        final=final)
+        if not kmeans_init:
+            embed = l2norm(uniform_init(num_codebooks, codebook_size, dim))
         else:
-            return self.vq_sample(features, 
-                                    st=st, idxs=idxs, final=final)
+            embed = torch.zeros(num_codebooks, codebook_size, dim)
 
+        self.codebook_size = codebook_size
+        self.num_codebooks = num_codebooks
 
-    def compute_baseloss(self, quantized, inputs, logits=None, avg=False, loss_type=0):
-        if self.gumble:
-            # + kl divergence to the prior loss
-            if (logits is None):
-                loss = 0
-            else:
-                qy = F.softmax(logits, dim=-1)
-                loss = self.kld_scale * torch.sum(qy * torch.log(qy * self._num_embeddings + 1e-10), dim=1).mean()
+        self.kmeans_iters = kmeans_iters
+        self.eps = eps
+        self.threshold_ema_dead_code = threshold_ema_dead_code
+        self.sample_codebook_temp = sample_codebook_temp
 
+        self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
+        self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
+        self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
+
+        self.register_buffer('initted', torch.Tensor([not kmeans_init]))
+        self.register_buffer('cluster_size', torch.zeros(num_codebooks, codebook_size))
+
+        self.learnable_codebook = learnable_codebook
+        if learnable_codebook:
+            self.embed = nn.Parameter(embed)
         else:
-             # Loss
-            if not avg:
-                e_latent_loss = self.loss_fn(quantized.detach(), inputs)
-                q_latent_loss = self.loss_fn(quantized, inputs.detach())
-            else:
-                e_latent_loss = self.loss_fn(quantized.mean(1).detach(), inputs.mean(1))
-                q_latent_loss = self.loss_fn(quantized.mean(1), inputs.mean(1).detach())
+            self.register_buffer('embed', embed)
+
+        self.qk = qk_codebook
+        if self.qk:
+            self.qkclass = QKCodebook(nhidden, codebook_size)
 
 
-            if loss_type == 0:
-                loss = q_latent_loss + self._commitment_cost * e_latent_loss
-            elif loss_type == 1:
-                loss = q_latent_loss
-            else:
-                loss = self._commitment_cost * e_latent_loss
+    @torch.jit.ignore
+    def init_embed_(self, data):
+        if self.initted:
+            return
 
-        return loss 
+        embed, cluster_size = kmeans(
+            data,
+            self.codebook_size,
+            self.kmeans_iters,
+            use_cosine_sim = True,
+            sample_fn = self.sample_fn,
+            all_reduce_fn = self.kmeans_all_reduce_fn
+        )
+
+        self.embed.data.copy_(embed)
+        self.cluster_size.data.copy_(cluster_size)
+        self.initted.data.copy_(torch.Tensor([True]))
+
+    def replace(self, batch_samples, batch_mask):
+        batch_samples = l2norm(batch_samples)
+
+        for ind, (samples, mask) in enumerate(zip(batch_samples.unbind(dim = 0), batch_mask.unbind(dim = 0))):
+            if not torch.any(mask):
+                continue
+
+            sampled = self.sample_fn(rearrange(samples, '... -> 1 ...'), mask.sum().item())
+            self.embed.data[ind][mask] = rearrange(sampled, '1 ... -> ...')
+
+    def expire_codes_(self, batch_samples):
+        if self.threshold_ema_dead_code == 0:
+            return
+
+        expired_codes = self.cluster_size < self.threshold_ema_dead_code
+
+        if not torch.any(expired_codes):
+            return
+
+        batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
+        self.replace(batch_samples, batch_mask = expired_codes)
+
+    @autocast(enabled = False)
+    def forward(self, x):
+
+        input_shape = x.shape
+        needs_codebook_dim = x.ndim < 4
+
+        x = x.float()
+
+        if needs_codebook_dim:
+            x = rearrange(x, '... -> 1 ...')
+
+        shape, dtype = x.shape, x.dtype
+
+        flatten = rearrange(x, 'h ... d -> h (...) d')
+        flatten = l2norm(flatten)
+
+        self.init_embed_(flatten)
+
+        embed = self.embed if not self.learnable_codebook else self.embed.detach()
+        embed = l2norm(embed)
+
+        dist = einsum('h n d, h c d -> h n c', flatten, embed)
+        embed_ind = gumbel_sample(dist, dim = -1, temperature = self.sample_codebook_temp)
+        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
+        embed_ind = embed_ind.view(*shape[:-1])
+
+        quantize = batched_embedding(embed_ind, self.embed)
+
+        if self.training:
+            bins = embed_onehot.sum(dim = 1)
+            self.all_reduce_fn(bins)
+
+            self.cluster_size.data.lerp_(bins, 1 - self.decay)
+
+            zero_mask = (bins == 0)
+            bins = bins.masked_fill(zero_mask, 1.)
+
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+            self.all_reduce_fn(embed_sum)
+
+            embed_normalized = embed_sum / rearrange(bins, '... -> ... 1')
+            embed_normalized = l2norm(embed_normalized)
+
+            embed_normalized = torch.where(
+                rearrange(zero_mask, '... -> ... 1'),
+                embed,
+                embed_normalized
+            )
+
+            self.embed.data.lerp_(embed_normalized, 1 - self.decay)
+            self.expire_codes_(x)
+
+        if needs_codebook_dim:
+            quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
+
+
+        if self.qk:
+            slots, slots_mu, slots_logvar = self.qkclass.sample_mu_sigma(quantize,
+                                                                            embed_onehot,
+                                                                            input_shape)
+            return quantize, embed_ind, slots, slots_mu, slots_logvar
+
+        return quantize, embed_ind
 
 
 
-    def compute_qkloss(self, final, encodings, inputs, avg, loss_type, logvar=None, mean=None):
-        # qk loss
-        input_shape = inputs.shape
 
-        qkloss = 0
-        if final:
-            # may not be required (push K embeddings towards slots)
-            kquantized = torch.matmul(encodings, self._embedding.weight)
-            qkloss += self.compute_baseloss(kquantized.view(input_shape), 
-                                                inputs, None, avg, loss_type)
-            
-            qkloss += self.loss_fn(inputs.clone().detach(), mean.view(input_shape))
+
+
+# main class
+class VectorQuantizer(nn.Module):
+    def __init__(
+        self,
+        dim,
+        codebook_size,
+        codebook_dim = None,
+        nhidden = 128,
+        heads = 1,
+        separate_codebook_per_head = False,
+        decay = 0.8,
+        eps = 1e-5,
+        kmeans_init = False,
+        kmeans_iters = 10,
+        sync_kmeans = True,
+        use_cosine_sim = False,
+        threshold_ema_dead_code = 2,
+        channel_last = True,
+        qk_codebook = False,
+        commitment_weight = 1.,
+        orthogonal_reg_weight = 10.0,
+        orthogonal_reg_active_codes_only = True,
+        orthogonal_reg_max_codes = None,
+        sample_codebook_temp = 0.,
+        sync_codebook = False
+    ):
+        super().__init__()
+        self.heads = heads
+        self.separate_codebook_per_head = separate_codebook_per_head
+
+        codebook_dim = default(codebook_dim, dim)
+        codebook_input_dim = codebook_dim * heads
+
+        requires_projection = codebook_input_dim != dim
+        self.project_in = nn.Sequential(nn.Linear(dim, dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(dim, codebook_input_dim)) if requires_projection else nn.Identity()
+        self.project_out = nn.Sequential(nn.Linear(codebook_input_dim, dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(dim, dim)) if requires_projection else nn.Identity()
+
+
+
+        self.eps = eps
+        self.nhidden = nhidden
+        self.commitment_weight = commitment_weight
+
+        has_codebook_orthogonal_loss = orthogonal_reg_weight > 0
+        self.orthogonal_reg_weight = orthogonal_reg_weight
+        self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
+        self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
+
+
+        self.qk = qk_codebook
+        codebook_class = EuclideanCodebook if not use_cosine_sim else CosineSimCodebook
+
+        self._codebook = codebook_class(
+            dim = codebook_dim,
+            nhidden = self.nhidden,
+            num_codebooks = heads if separate_codebook_per_head else 1,
+            codebook_size = codebook_size,
+            kmeans_init = kmeans_init,
+            kmeans_iters = kmeans_iters,
+            sync_kmeans = sync_kmeans,
+            decay = decay,
+            eps = eps,
+            qk_codebook = qk_codebook,
+            threshold_ema_dead_code = threshold_ema_dead_code,
+            use_ddp = sync_codebook,
+            learnable_codebook = has_codebook_orthogonal_loss,
+            sample_codebook_temp = sample_codebook_temp
+        )
+
+        self.codebook_size = codebook_size
+
+        self.channel_last = channel_last
+
+    @property
+    def codebook(self):
+        codebook = self._codebook.embed
+        if self.separate_codebook_per_head:
+            return codebook
+
+        return rearrange(codebook, '1 ... -> ...')
+
+    def forward(
+        self,
+        x,
+        loss_type = 1,
+        update=False,
+        reset_usage = False,
+        mask = None
+    ):
+        only_one = x.ndim == 2
+        if only_one:
+            x = rearrange(x, 'b d -> b 1 d')
+
+        shape, device, heads, is_multiheaded, codebook_size = x.shape, x.device, self.heads, self.heads > 1, self.codebook_size
+
+        need_transpose = not self.channel_last and not self.accept_image_fmap
+
+        if need_transpose:
+            x = rearrange(x, 'b d n -> b n d')
+
+        x = self.project_in(x)
+
+        if is_multiheaded:
+            ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
+            x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h = heads)
+
+        if self.qk:
+            quantize, embed_ind, slots, slots_mu, slots_logvar = self._codebook(x)
         else:
-            # qkloss += get_cb_variance(self.mu_embeddings.weight)
-            # qkloss += 0.001 * torch.mean(torch.norm(self.sigma_embeddings.weight, dim=1))
-
-            # kl loss between sampled marginal distributions
-            qkloss += 0 #torch.mean(-0.5 * (1 + logvar - mean ** 2 - logvar.exp()))
-           
-        return qkloss
-
-
-    def forward(self, *args):
-        return NotImplementedError()
+            quantize, embed_ind = self._codebook(x)
 
 
 
-class VectorQuantizer(BaseVectorQuantizer):
-    def __init__(self, num_embeddings, 
-                        embedding_dim, 
-                        nhidden,
-                        commitment_cost=0.99,
-                        usage_threshold=1.0e-9,
-                        variational=False,
-                        qk=False,
-                        cosine=False,
-                        gumble=False,
-                        temperature=1.0,
-                        kld_scale=1.0):
-        super(VectorQuantizer, self).__init__(num_embeddings, 
-                                                    embedding_dim, 
-                                                    nhidden,
-                                                    commitment_cost,
-                                                    usage_threshold,
-                                                    variational,
-                                                    qk,
-                                                    cosine,
-                                                    gumble,
-                                                    temperature,
-                                                    kld_scale)
-        
-        self._embedding_dim = embedding_dim
-        self._num_embeddings = num_embeddings
-        self._commitment_cost = commitment_cost
-        self._usage_threshold = usage_threshold
-        self.variational = variational
-        self._cosine = cosine
-        self.qk=qk
+        # import pdb;pdb.set_trace()
+        loss = torch.tensor([0.], device = device, requires_grad = self.training)
+        loss = F.mse_loss(x.detach(), quantize)
+
+        if self.training:
+            if self.commitment_weight > 0:
+                detached_quantize = quantize.detach()
+
+                if exists(mask):
+                    # with variable lengthed sequences
+                    commit_loss = F.mse_loss(detached_quantize, x, reduction = 'none')
+                    if is_multiheaded:
+                        mask = repeat(mask, 'b n -> c (b h) n', c = commit_loss.shape[0], h = commit_loss.shape[1] // mask.shape[0])
+                    commit_loss = commit_loss[mask].mean()
+                else:
+                    commit_loss = F.mse_loss(detached_quantize, x)
+
+                loss = loss + commit_loss * self.commitment_weight
+
+            if self.orthogonal_reg_weight > 0:
+                codebook = self._codebook.embed
+
+                if self.orthogonal_reg_active_codes_only:
+                    # only calculate orthogonal loss for the activated codes for this batch
+                    unique_code_ids = torch.unique(embed_ind)
+                    codebook = codebook[:, unique_code_ids]
+
+                num_codes = codebook.shape[0]
+                if exists(self.orthogonal_reg_max_codes) and num_codes > self.orthogonal_reg_max_codes:
+                    rand_ids = torch.randperm(num_codes, device = device)[:self.orthogonal_reg_max_codes]
+                    codebook = codebook[:, rand_ids]
+
+                orthogonal_reg_loss = orthogonal_loss_fn(codebook)
+                loss = loss + orthogonal_reg_loss * self.orthogonal_reg_weight
 
 
-    def forward(self, inputs, avg=False, 
-                        unique = False,
-                        nunique = -1,
-                        update=True,
-                        loss_type=0,
-                        final=False,
-                        idxs=None,
-                        reset_usage=False):
-
-        input_shape = inputs.shape
-
-        quantized, encoding_indices, encodings, slots, logits, logvar, mean = self.sample(inputs, unique, nunique, idxs=idxs,final=final)
-
-        # Restart vectors
-        if final and update:
-            if np.random.uniform() > 0.99: self.random_restart()
-            if reset_usage: self.reset_usage()
+        if self.qk:
+            loss += self._codebook.qkclass.compute_qkloss(embed_ind, x)
 
 
-        # Reset unused cb vectors...
-        if final and update: self.update_usage(encoding_indices)
-
-
-        # Loss
-        loss = self.compute_baseloss(quantized, inputs, logits, avg, loss_type)
-
-
-        if not (loss_type == 2):
-            if self.qk:
-                qkloss = self.compute_qkloss(final, encodings, inputs, avg, loss_type, logvar, mean)
-            
-            # loss += get_cb_variance(self._embedding.weight)
-            loss += qkloss
-
-
-        # Straight Through Estimator
-        if not self.gumble: quantized = inputs + (quantized - inputs).detach()
-        avg_probs = torch.mean(encodings, dim=0)
-        perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
-        encoding_indices = encoding_indices.view(input_shape[0], -1)
-
-
-        return loss, quantized, perplexity, encoding_indices, slots
-
-
-
-
-
-class VectorQuantizerEMA(BaseVectorQuantizer):
-    def __init__(self, num_embeddings, 
-                        embedding_dim, 
-                        nhidden,
-                        commitment_cost, 
-                        decay, 
-                        epsilon=1e-5,
-                        usage_threshold=1.0e-9,
-                        variational=False,
-                        qk=False,
-                        cosine=False,
-                        gumble=False,
-                        temperature=1.0,
-                        kld_scale=1.0):
-        super(VectorQuantizerEMA, self).__init__(num_embeddings, 
-                                                    embedding_dim,
-                                                    nhidden, 
-                                                    commitment_cost,
-                                                    usage_threshold,
-                                                    variational,
-                                                    qk,
-                                                    cosine,
-                                                    gumble,
-                                                    temperature,
-                                                    kld_scale)
-        
-        self._embedding_dim = embedding_dim
-        self._num_embeddings = num_embeddings
-        self._commitment_cost = commitment_cost
-        self._usage_threshold = usage_threshold
-        self.variational = variational
-        self._cosine = cosine
-        self.qk = qk
-
-       
-
-        # ======================
-        self.register_buffer('_ema_cluster_size', torch.zeros(num_embeddings))
-        self._ema_w = nn.Parameter(torch.Tensor(num_embeddings, self._embedding_dim))
-        self._ema_w.data.normal_()
-        
-        self._decay = decay
-        self._epsilon = epsilon
-
-
-    def forward(self, inputs, 
-                        avg=False, 
-                        update=False,
-                        loss_type=0,
-                        final=False,
-                        idxs=None,
-                        reset_usage=False):
-        input_shape = inputs.shape
-
-        inputs = self.proj(inputs)
-        # layer norm on features
-        inputs = self.norm_input(inputs)
-
-        # Flatten input
-        flat_input = inputs.view(-1, self._embedding_dim)
-
-        quantized, encoding_indices, encodings, slots, logits, logvar, mean  = self.sample(inputs, 
-                                                                                            idxs=idxs, 
-                                                                                            final=final,
-                                                                                            from_train=True)
-
-
-        # ===================================
-        # Tricks to prevent codebook collapse---
-        # Restart vectors
-        # if update:
-        #     if np.random.uniform() > 0.99: self.random_restart()
-        #     if reset_usage: self.reset_usage()
-
-
-        # # Reset unused cb vectors...
-        # if update: self.update_usage(encoding_indices)
-
-
-        # Use EMA to update the embedding vectors
         # if self.training:
-        #     self._ema_cluster_size = self._ema_cluster_size * self._decay + \
-        #                              (1 - self._decay) * torch.sum(encodings, 0)
-            
-        #     # Laplace smoothing of the cluster size
-        #     n = torch.sum(self._ema_cluster_size.data)
-        #     self._ema_cluster_size = ((self._ema_cluster_size + self._epsilon)
-        #                         / (n + self._num_embeddings * self._epsilon) * n)
-            
-        #     dw = torch.matmul(encodings.t(), flat_input)
-        #     self._ema_w = nn.Parameter(self._ema_w * self._decay + (1 - self._decay) * dw)
-        #     self._embedding.weight = nn.Parameter(self._ema_w / self._ema_cluster_size.unsqueeze(1))
-        
-        # ============================
+        #     quantize = x + (quantize - x).detach()
 
+        if is_multiheaded:
+            if self.separate_codebook_per_head:
+                quantize = rearrange(quantize, 'h b n d -> b n (h d)', h = heads)
+                embed_ind = rearrange(embed_ind, 'h b n -> b n h', h = heads)
+            else:
+                quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h = heads)
+                embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h = heads)
 
-        loss = self.compute_baseloss(quantized, inputs, logits, avg, loss_type)
+        quantize = self.project_out(quantize)
 
-        if not (loss_type == 2):
-            if self.qk:
-                qkloss = self.compute_qkloss(final, 
-                                                encodings, 
-                                                inputs, 
-                                                avg, 
-                                                loss_type, 
-                                                logvar, 
-                                                mean)
-            
-            # loss += get_cb_variance(self._embedding.weight)
-            # print (f'feature: {inputs.max()}, qfeatures: {quantized.max()}, quant loss: {loss}, QKloss: {qkloss}, key: {torch.max(self._embedding.weight)}, mu: {torch.max(self.mu_embeddings.weight)}, sigma: {torch.max(self.sigma_embeddings.weight)}')
-            loss += qkloss
+        if need_transpose:
+            quantize = rearrange(quantize, 'b n d -> b d n')
 
+        if only_one:
+            quantize = rearrange(quantize, 'b 1 d -> b d')
+            embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
-        # Straight Through Estimator
-        if not self.gumble: quantized = inputs + (quantized - inputs).detach()
-        avg_probs = torch.mean(encodings, dim=0)
+        avg_probs = torch.mean(embed_ind.type(x.dtype), dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         
-        encoding_indices = encoding_indices.view(input_shape[0], -1)
+        loss = 1*loss
         
-        return loss, quantized, perplexity, encoding_indices, slots, mean
+        if self.qk:
+            return quantize, embed_ind, loss, perplexity, slots, slots_mu
+
+        return quantize, embed_ind, loss, perplexity, None, None
