@@ -1,39 +1,66 @@
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 from einops import rearrange, repeat
-from src.utils import unique_sampling_fn, get_euclidian_distance, sorting_idxs, get_cosine_distance, get_cb_variance
+from src.utils import (uniform_init, unique_sampling_fn, 
+                        get_euclidian_distance, sorting_idxs, 
+                        get_cosine_distance, get_cb_variance)
 
 
 class QKCodebook(nn.Module):
     def __init__(self, dim, codebook_size):
         super().__init__()
         self.dim = dim
-        self.mu_embeddings = nn.Embedding(codebook_size, dim)
-        self.sigma_embeddings = nn.Embedding(codebook_size, dim)
-        nn.init.xavier_uniform_(self.mu_embeddings.weight)
-        nn.init.xavier_uniform_(self.sigma_embeddings.weight)
+        
+        self.register_buffer('mu_embeddings', uniform_init(codebook_size, dim))
+        self.register_buffer('sigma_embeddings', uniform_init(codebook_size, dim))
 
-    def sample_mu_sigma(self, quantized, encodings, shape, MCsamples=1):
+        self.fc1_w = nn.Parameter(uniform_init(codebook_size, dim, dim))
+        self.fc1_b = nn.Parameter(uniform_init(codebook_size, dim))
+
+        self.fc2_w = nn.Parameter(uniform_init(codebook_size, dim, dim))
+        self.fc2_b = nn.Parameter(uniform_init(codebook_size, dim))
+
+
+    def sample_slots(self, quantized, encodings, shape, MCsamples=1):
         # quantized: quantized feature encodings MB*Ntokens x dim
         # encodings: encoded index MB*Ntokens x 1
         # shape: MB x Ntokens x dim
 
-        shape = (shape[0], -1, self.dim)
-        slot_mu = torch.matmul(encodings, self.mu_embeddings.weight)
-        slot_sigma = torch.matmul(encodings, self.sigma_embeddings.weight)
+        shape = (shape[0], shape[1], self.dim)
+        slot_mu = torch.matmul(encodings, self.mu_embeddings)
+        slot_sigma = torch.matmul(encodings, self.sigma_embeddings)
+        slot_sigma = torch.exp(0.5*slot_sigma)
+        slots = torch.cat([torch.normal(slot_mu, slot_sigma).view(shape).unsqueeze(1) for _ in range(MCsamples)], 1)
 
-        slot_mu = slot_mu.view(shape)
-        slot_sigma = slot_sigma.view(shape)
 
-        # MC expectation estimation
-        sampling_shape = (slot_sigma.shape[0], MCsamples, slot_sigma.shape[1], slot_sigma.shape[2])  
-        slots = slot_mu.unsqueeze(1) + slot_sigma.unsqueeze(1) * torch.randn(sampling_shape, 
-                                                            device = slot_sigma.device, 
-                                                            dtype = slot_sigma.dtype)
+        # weights for transformations =======================
+        encodings = encodings.view(shape[0], shape[1], -1)
+        fc1w = torch.einsum('bnd,dgk->bngk', encodings, self.fc1_w)
+        fc1b = torch.einsum('bnd,dg->bng',encodings, self.fc1_b)
+
+        fc2w = torch.einsum('bnd,dgk->bngk',encodings, self.fc2_w)
+        fc2b = torch.einsum('bnd,dg->bng',encodings, self.fc2_b)
+
+
+        # apply transformation ===============
+        slots = F.relu(torch.einsum('bmnd,bndw->bmnw', slots, fc1w) + fc1b.unsqueeze(1))
+        slots = F.relu(torch.einsum('bmnd,bndw->bmnw', slots, fc2w) + fc2b.unsqueeze(1)) 
+
+
+        # slot_mu = slot_mu.view(shape)
+        # slot_sigma = slot_sigma.view(shape)
+
+        # # MC expectation estimation
+        # sampling_shape = (slot_sigma.shape[0], MCsamples, slot_sigma.shape[1], slot_sigma.shape[2])  
+        # slots = slot_mu.unsqueeze(1) + slot_sigma.unsqueeze(1) * torch.randn(sampling_shape, 
+        #                                                     device = slot_sigma.device, 
+        #                                                     dtype = slot_sigma.dtype)
 
         # MC samples along batch axis.....
+
         slots = rearrange(slots, 'b m n d -> (b m) n d')
-        return slots, slot_mu, slot_sigma
+        return slots #, slot_mu, slot_sigma
 
 
     def compute_qkloss(self, embed_ind, inputs):
@@ -41,8 +68,6 @@ class QKCodebook(nn.Module):
         input_shape = inputs.shape
 
         unique_code_ids = torch.unique(embed_ind)
-        mu_codebook = self.mu_embeddings.weight[unique_code_ids]
-        logvar_codebook = self.sigma_embeddings.weight[unique_code_ids]
 
         qkloss = 0
         # qkloss += get_cb_variance(mu_codebook)

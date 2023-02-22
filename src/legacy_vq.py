@@ -154,19 +154,19 @@ class BaseVectorQuantizer(nn.Module):
         quantized = torch.matmul(encodings, self._embedding.weight)
     
         # =========
-        slot_mu = None; slot_sigma = None; slots = None
+        slots = None
         # slot sampling
         if self.qk:
-            slots, slot_mu, slot_sigma = self.qkclass.sample_mu_sigma(quantized, 
-                                                                        encodings, 
-                                                                        input_shape,
-                                                                        MCsamples=MCsamples)
+            slots = self.qkclass.sample_slots(quantized, 
+                                                encodings, 
+                                                input_shape,
+                                                MCsamples=MCsamples)
 
 
         quantized = self.project_out(quantized)
         quantized = self.norm_out(quantized)
-
-        return quantized.view(input_shape), encoding_indices, encodings, slots, None, slot_sigma, slot_mu
+        quantized = quantized.view(input_shape)
+        return quantized, encoding_indices, encodings, slots, None
 
 
     def gumble_sample(self, features, 
@@ -179,7 +179,6 @@ class BaseVectorQuantizer(nn.Module):
 
         # force hard = True when we are in eval mode, as we must quantize
         logits = self.gumble_proj(features)
-
 
         # Update prior with previosuly wrt principle components
         if not (idxs is None):
@@ -206,17 +205,17 @@ class BaseVectorQuantizer(nn.Module):
         
         
         # ==========================
-        slot_mu = None; slot_sigma = None; slots = None
+        slots = None
         # slot sampling
         if self.qk:
-            slots, slot_mu, slot_sigma = self.qkclass.sample_mu_sigma(quantized, 
-                                                                        encodings, 
-                                                                        input_shape,
-                                                                        MCsamples=MCsamples)
+            slots = self.qkclass.sample_slots(quantized, 
+                                                    encodings, 
+                                                    input_shape,
+                                                    MCsamples=MCsamples)
 
         quantized = self.project_out(quantized)
         quantized = self.norm_out(quantized)
-        return quantized, encoding_indices, encodings, slots, logits, slot_sigma, slot_mu
+        return quantized, encoding_indices, encodings, slots, logits
 
 
 
@@ -249,8 +248,9 @@ class BaseVectorQuantizer(nn.Module):
             if (logits is None):
                 loss = 0
             else:
-                qy = F.softmax(logits, dim=1)
-                loss = self.kld_scale * torch.sum(qy * torch.log(qy * self._num_embeddings + 1e-10), dim=1).mean()
+                print (logits.min(), logits.max(), logits.mean(), '===========')
+                qy = F.softmax(logits, dim=-1)
+                loss = self.kld_scale * torch.sum(qy * torch.log(qy * self._num_embeddings + 1e-10), dim=-1).mean()
 
         else:
              # Loss
@@ -342,11 +342,11 @@ class VectorQuantizer(BaseVectorQuantizer):
 
 
 
-        quantized, encoding_indices, encodings, slots, logits, logvar, mean  = self.sample(features, 
-                                                                                            idxs=idxs, 
-                                                                                            hard = True,
-                                                                                            MCsamples = MCsamples,
-                                                                                            from_train=True)
+        quantized, encoding_indices, encodings, slots, logits = self.sample(features, 
+                                                                            idxs=idxs, 
+                                                                            hard = True,
+                                                                            MCsamples = MCsamples,
+                                                                            from_train=True)
 
 
 
@@ -398,10 +398,10 @@ class VectorQuantizer(BaseVectorQuantizer):
         # print (f'feature: {inputs.max()}, qfeatures: {quantized.max(), quantized.min(), quantized.mean()}, quant loss: {loss}, QKloss: {qkloss}')
         
         # Straight Through Estimator
-        quantized = inputs + (quantized - inputs).detach()
+        if not self.gumble: quantized = inputs + (quantized - inputs).detach()
         avg_probs = torch.mean(encodings, dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
         
         encoding_indices = encoding_indices.view(input_shape[0], -1)
         
-        return quantized, encoding_indices, loss, perplexity, slots, mean
+        return quantized, encoding_indices, loss, perplexity, slots

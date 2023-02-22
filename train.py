@@ -27,51 +27,55 @@ parser = argparse.ArgumentParser()
 def str2bool(v):
     return v.lower() in ('true', '1')
 
-
+# exp setup information
 parser.add_argument('--model_dir', default='Logs', type=str, help='where to save models' )
 parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
+parser.add_argument('--seed', default=0, type=int, help='random seed')
+parser.add_argument('--nunique_objects', type=int, default=8, help='total number of unique objects in the dataset')
+
+
+# dataset information
 parser.add_argument('--dataset_name', default='clevr', type=str, help='where to save models' )
 parser.add_argument('--variant', default='hans3', type=str, help='where to save models' )
-
-parser.add_argument('--img_size', default=128, type=int)
-parser.add_argument('--encoder_res', default=8, type=int)
-parser.add_argument('--decoder_res', default=8, type=int)
+parser.add_argument('--img_size', default=128, type=int, help='image size')
 
 
-parser.add_argument('--seed', default=0, type=int, help='random seed')
-parser.add_argument('--batch_size', default=32, type=int)
+# model information
+parser.add_argument('--kernel_size', default=5, type=int, help='convolutional kernel size')
+parser.add_argument('--encoder_res', default=8, type=int, help='encoder latent size')
+parser.add_argument('--decoder_res', default=8, type=int, help='decoder init size')
 
-parser.add_argument('--nunique_objects', type=int, default=8)
+# SA parameters
 parser.add_argument('--num_slots', default=7, type=int, help='Number of slots in Slot Attention.')
-parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
 parser.add_argument('--num_iterations', default=5, type=int, help='Number of attention iterations.')
 parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
-parser.add_argument('--learning_rate', default=0.0004, type=float)
 
+# BSA parameters
+parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
+parser.add_argument('--quantize', default=False, type=str2bool, help='perform slot quantization')
+parser.add_argument('--cosine', default=False, type=str2bool, help='use geodesic distance')
+parser.add_argument('--cb_decay', type=float, default=0.999, help='EMA decay for codebook')
+parser.add_argument('--cb_qk', type=str2bool, default=False, help='use slot dictionary structure')
+parser.add_argument('--eigen_quantizer', type=str2bool, default=False, help='quantize principle components')
+parser.add_argument('--restart_cbstats', type=str2bool, default=False, help='random restart codebook stats to prevent codebook collapse')
+parser.add_argument('--gumble', type=str2bool, default=False, help='use gumple softmax trick for continious sampling')
+parser.add_argument('--temperature', type=float, default=2.0, help='sampling temperature')
+parser.add_argument('--kld_scale', type=float, default=1.0, help='kl distance weightage')
+
+
+# training parameters
+parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
+parser.add_argument('--learning_rate', default=0.0004, type=float, help='training learning rate')
+parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
+parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
+parser.add_argument('--implicit', type=str2bool, default=False, help="use implicit neumann's approximation for computing fixed point")
+parser.add_argument('--overlap_weightage', type=float, default=0.0, help='use mask overlap as a regularization constraints')
+
+
+# unused parameters
 parser.add_argument('--warmup_steps', default=10000, type=int, help='Number of warmup steps for the learning rate.')
 parser.add_argument('--decay_rate', default=0.5, type=float, help='Rate for the learning rate decay.')
 parser.add_argument('--decay_steps', default=100000, type=int, help='Number of steps for the learning rate decay.')
-parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
-parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
-
-parser.add_argument('--quantize', default=False, type=str2bool, help='perform slot quantization')
-parser.add_argument('--cosine', default=False, type=str2bool, help='use geodesic distance')
-parser.add_argument('--unique_sampling', default=False, type=str2bool, help='use unique sampling')
-
-
-parser.add_argument('--eigen_noposition', type=str2bool, default=True)
-
-parser.add_argument('--overlap_weightage', type=float, default=0.0)
-parser.add_argument('--cb_decay', type=float, default=0.999)
-
-parser.add_argument('--cb_qk', type=str2bool, default=False)
-parser.add_argument('--eigen_quantizer', type=str2bool, default=False)
-parser.add_argument('--restart_cbstats', type=str2bool, default=False)
-
-parser.add_argument('--implicit', type=str2bool, default=False)
-parser.add_argument('--gumble', type=str2bool, default=False)
-parser.add_argument('--temperature', type=float, default=1.0)
-parser.add_argument('--kld_scale', type=float, default=1.0)
 
 
 
@@ -79,6 +83,7 @@ parser.add_argument('--kld_scale', type=float, default=1.0)
 opt = parser.parse_args()
 opt.model_dir = os.path.join(opt.model_dir, opt.exp_name)
 
+# dataset path setting =====================================
 
 # set information based on dataset and it variant
 if opt.dataset_name == 'bitmoji':
@@ -88,6 +93,7 @@ if opt.dataset_name == 'bitmoji':
     opt.img_size = 64
     opt.max_slots = 32
     opt.nunique_objects = 9
+    opt.kernel_size = 5
     opt.num_slots = 7
     opt.data_root = '/vol/biomedic3/agk21/datasets/bitmoji'
 
@@ -96,17 +102,16 @@ elif opt.dataset_name == 'clevr':
     opt.decoder_res = 8
     opt.img_size = 64
     opt.max_slots = 19
+    opt.kernel_size = 5
     opt.num_slots = 7
+    opt.nunique_objects = 16
 
     if opt.variant == 'hans3':
         opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3'
-        opt.nunique_objects = 4
     elif opt.variant == 'hans7':
         opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans7'
-        opt.nunique_objects = 8
     else:
         opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/clevr_with_masks'
-        opt.nunique_objects = 8
 
 
 elif opt.dataset_name == 'multi_dsprites':
@@ -116,6 +121,7 @@ elif opt.dataset_name == 'multi_dsprites':
     opt.max_slots = 5    
     opt.num_slots = 5
     opt.nunique_objects = 5
+    opt.kernel_size = 3
 
     if opt.variant == 'colored_on_colored':
         opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/multi_dsprites/colored_on_colored'
@@ -131,6 +137,7 @@ elif opt.dataset_name == 'objects_room':
     opt.max_slots = 16
     opt.num_slots = 6
     opt.nunique_objects = 8
+    opt.kernel_size = 3
     opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/objects_room/default'
 
 
@@ -142,6 +149,7 @@ elif opt.dataset_name == 'tetrominoes':
     opt.max_slots = 20
     opt.nunique_objects = 16
     opt.num_slots = 5
+    opt.kernel_size = 3
     opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/tetrominoes'
 
 
@@ -153,11 +161,15 @@ elif opt.dataset_name == 'ffhq':
     opt.max_slots = 64
     opt.num_slots = 7
     opt.nunique_objects = 15
+    opt.kernel_size = 5
     opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/FFHQ/data'
 
 else:
     raise ValueError('Invalid dataset found')
 
+
+# =========================================================
+# Dump exp config into json and tensorboard logs....
 
 resolution = (opt.img_size, opt.img_size)
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
@@ -178,29 +190,37 @@ os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir)
 writer.add_text('hparams', arg_str)
 
-model = SlotAttentionAutoEncoder(resolution, 
-                                    opt.num_slots, 
-                                    opt.num_iterations, 
-                                    opt.hid_dim,
-                                    opt.max_slots,
-                                    opt.nunique_objects,
-                                    opt.quantize,
-                                    opt.cosine,
-                                    opt.cb_decay,
-                                    opt.encoder_res,
-                                    opt.decoder_res,
-                                    opt.cb_qk,
-                                    opt.eigen_quantizer,
-                                    opt.restart_cbstats,
-                                    opt.implicit,
-                                    opt.gumble,
-                                    opt.temperature,
-                                    opt.kld_scale).to(device)
+# ======================================================
+# model init
+
+
+model = SlotAttentionAutoEncoder(resolution = resolution, 
+                                    num_slots =  opt.num_slots, 
+                                    num_iterations =  opt.num_iterations, 
+                                    hid_dim =  opt.hid_dim,
+                                    max_slots =  opt.max_slots,
+                                    nunique_slots =  opt.nunique_objects,
+                                    quantize = opt.quantize,
+                                    cosine = opt.cosine,
+                                    cb_decay = opt.cb_decay,
+                                    encoder_res =  opt.encoder_res,
+                                    decoder_res = opt.decoder_res,
+                                    kernel_size = opt.kernel_size,
+                                    cb_qk = opt.cb_qk,
+                                    eigen_quantizer =  opt.eigen_quantizer,
+                                    restart_cbstats =  opt.restart_cbstats,
+                                    implicit = opt.implicit,
+                                    gumble = opt.gumble,
+                                    temperature = opt.temperature,
+                                    kld_scale = opt.kld_scale).to(device)
 model.device = device
-# model.load_state_dict(torch.load('./tmp/model6.ckpt')['model_state_dict'])
 
 
 params = [{'params': model.parameters()}]
+
+
+# ======================================================
+# dataloader init
 
 train_set = DataGenerator(root=opt.data_root, mode='train', resolution=resolution)
 train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
@@ -218,10 +238,13 @@ test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_siz
 train_epoch_size = min(50000, len(train_dataloader))
 val_epoch_size = min(10000, len(val_dataloader))
 
-opt.log_interval = train_epoch_size // 5
-optimizer = optim.Adam(params, lr=opt.learning_rate)
+# ======================================================
+# optimizer init
 
-# criterion = nn.MSELoss()
+optimizer = optim.Adam(params, lr=opt.learning_rate)
+opt.log_interval = train_epoch_size // 5
+
+
 
 def create_histogram(k, img_size, cbidx):
     image = np.zeros((2*k + 2, 2*k + 2, 3), dtype='uint8')
@@ -266,7 +289,6 @@ def linear_warmup(step, start_value, final_value, start_step, final_step):
         value = a * progress + b
     
     return value
-
 
 
 class SoftDiceLossV1(nn.Module):
@@ -323,7 +345,7 @@ def training_step(model, optimizer, epoch, opt):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
         recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image, 
-                                                                                MCsamples = 2,
+                                                                                MCsamples = 1,
                                                                                 epoch=epoch, 
                                                                                 batch=ibatch)
         recon_loss_ = ((image - recon_combined)**2).mean()
@@ -458,13 +480,14 @@ for epoch in range(opt.num_epochs):
     print ('='*150)
 
 
-    # if epoch*train_epoch_size < opt.warmup_steps: 
-    #     learning_rate = opt.learning_rate *(epoch * train_epoch_size / opt.warmup_steps)
-    # else:
-    #     learning_rate = opt.learning_rate
+    # warm up learning rate setup
+    if epoch*train_epoch_size < opt.warmup_steps: 
+        learning_rate = opt.learning_rate *(epoch * train_epoch_size / opt.warmup_steps)
+    else:
+        learning_rate = opt.learning_rate
    
-    # learning_rate = learning_rate * (opt.decay_rate ** (epoch * train_epoch_size / opt.decay_steps))
-    # optimizer.param_groups[0]['lr'] = learning_rate
+    learning_rate = learning_rate * (opt.decay_rate ** (epoch * train_epoch_size / opt.decay_steps))
+    optimizer.param_groups[0]['lr'] = learning_rate
 
     
 
@@ -485,7 +508,7 @@ for epoch in range(opt.num_epochs):
             ckpt = torch.load(os.path.join(opt.model_dir, f'discovery_best.pth'))
             model.load_state_dict(ckpt['model_state_dict'])
         
-        if counter > 3*patience:
+        if counter > 5*patience:
             print('Early Stopping: --------------')
             break
 

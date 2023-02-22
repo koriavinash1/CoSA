@@ -10,14 +10,14 @@ NAME=$9
 ITER=${10}
 
 NAME=$DATASET$VARIANT$NAME
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting47'
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting50'
 python /vol/biomedic3/agk21/testEigenSlots2/train.py \
                                             --dataset_name $DATASET \
                                             --variant $VARIANT \
                                             --exp_name $NAME \
                                             --batch_size 16 \
                                             --model_dir $LOGS \
-                                            --learning_rate 0.001 \
+                                            --learning_rate 0.0004 \
                                             --quantize $QUANTIZE \
                                             --cosine $COSINE \
                                             --gumble $GUMBLE \
