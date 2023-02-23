@@ -637,8 +637,7 @@ class SlotAttentionClassifier(nn.Module):
                         cb_decay=0.99,
                         encoder_res=4,
                         decoder_res=4,
-                        variational=False, 
-                        binarize=False,
+                        kernel_size=5,
                         cb_qk=False,
                         eigen_quantizer=False,
                         restart_cbstats=False,
@@ -660,6 +659,7 @@ class SlotAttentionClassifier(nn.Module):
     self.resolution = resolution
     self.num_slots = num_slots
     self.num_iterations = num_iterations
+    self.quantize = quantize
 
     # nclasses: numpber of nodes as outputs
     # In case of CLEVR: (coords=3) + (color=8) + (size=2) + (material=2) + (shape=3) + (real=1) = 19
@@ -667,27 +667,25 @@ class SlotAttentionClassifier(nn.Module):
 
     self.encoder_cnn = Encoder(self.resolution, self.hid_dim)
     self.slot_attention = SlotAttention(
-            num_slots=self.num_slots,
-            dim=hid_dim,
-            iters = self.num_iterations,
-            eps = 1e-8, 
-            hidden_dim = 128,
-            nunique_slots=nunique_slots,
-            quantize = quantize,
-            max_slots=max_slots,
-            cosine=cosine,
-            cb_decay=cb_decay,
-            encoder_intial_res=(encoder_res, encoder_res),
-            decoder_intial_res=(decoder_res, decoder_res),
-            cb_variational=variational,
-            cov_binarize=binarize,
-            cb_querykey=cb_qk,
-            eigen_quantizer=eigen_quantizer,
-            restart_cbstats=restart_cbstats,
-            implicit=implicit,
-            gumble=gumble,
-            temperature=temperature,
-            kld_scale=kld_scale)
+                                num_slots=self.num_slots,
+                                dim=hid_dim,
+                                iters = self.num_iterations,
+                                eps = 1e-8, 
+                                hidden_dim = 128,
+                                nunique_slots=nunique_slots,
+                                quantize = quantize,
+                                max_slots=max_slots,
+                                cosine=cosine,
+                                cb_decay=cb_decay,
+                                encoder_intial_res=(encoder_res, encoder_res),
+                                decoder_intial_res=(decoder_res, decoder_res),
+                                cb_querykey=cb_qk,
+                                eigen_quantizer=eigen_quantizer,
+                                restart_cbstats=restart_cbstats,
+                                implicit=implicit,
+                                gumble=gumble,
+                                temperature=temperature,
+                                kld_scale=kld_scale)
 
 
     self.mlp_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
@@ -697,7 +695,14 @@ class SlotAttentionClassifier(nn.Module):
     
     
 
-  def forward(self, image, num_slots=None, epoch=0, batch=0):
+  def forward(self, image, 
+                    num_slots=None, 
+                    MCsamples = 5,
+                    epoch=0, batch=0):
+
+    n_s = num_slots if num_slots is not None else self.num_slots   
+    MCsamples = MCsamples if self.quantize else 1  
+
     # `image` has shape: [batch_size, width, height, num_channels].
 
     # Convolutional encoder with position embedding.
@@ -708,16 +713,20 @@ class SlotAttentionClassifier(nn.Module):
     
     # Slot Attention module.
     slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, 
-                                                                    num_slots, 
-                                                                    epoch, 
-                                                                    batch, 
-                                                                    images=image)
-    # `slots` has shape: [batch_size, num_slots, slot_size].
+                                                                num_slots,
+                                                                MCsamples = MCsamples, 
+                                                                epoch = epoch, 
+                                                                batch = batch, 
+                                                                images=image)
+    # `slots` has shape: [batch_size, MCsamples, num_slots, slot_size].
     # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
 
-
+    # MC flatten
+    slots = rearrange(slots, 'b m n d -> (b m) n d')
     predictions = self.mlp_classifier(slots)
 
+    slots = slots.view(image.shape[0], MCsamples, n_s, -1)
+    slots = slots.mean(1)
     return predictions, cbidxs, qloss, perplexity
 
 

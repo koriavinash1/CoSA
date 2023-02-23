@@ -3,6 +3,7 @@ import argparse
 from src.dataset import DataGenerator
 from src.model import SlotAttentionAutoEncoder
 from src.metrics import calculate_fid
+from src.utils import get_cb_variance
 
 from tqdm import tqdm
 import time, math
@@ -81,7 +82,7 @@ parser.add_argument('--decay_steps', default=100000, type=int, help='Number of s
 
 
 opt = parser.parse_args()
-opt.model_dir = os.path.join(opt.model_dir, opt.exp_name)
+opt.model_dir = os.path.join(opt.model_dir, 'ObjectDiscovery', opt.exp_name)
 
 # dataset path setting =====================================
 
@@ -370,11 +371,12 @@ def training_step(model, optimizer, epoch, opt):
         with torch.no_grad():
             if ibatch % opt.log_interval == 0:            
                 writer.add_scalar('TRAIN/loss', loss.item(), global_step)
-                writer.add_scalar('TRAIN/recon', recon_loss_.item(), global_step)
-                writer.add_scalar('TRAIN/overlap', overlap_loss_.item(), global_step)
-                writer.add_scalar('TRAIN/perplexity', perplexity.item(), global_step)
-                writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
-                writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
+                writer.add_scalar('TRAIN/mse', recon_loss_.item(), global_step)
+                writer.add_scalar('TRAIN/opi', overlap_loss_.item(), global_step)
+                if opt.quantize: writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
+                if opt.quantize: writer.add_scalar('TRAIN/cbp', perplexity.item(), global_step)
+                if opt.quantize: writer.add_scalar('TRAIN/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+                if opt.quantize: writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
                 writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
         
 
@@ -424,11 +426,12 @@ def validation_step(model, optimizer, epoch, opt):
 
         if ibatch % opt.log_interval == 0:            
             writer.add_scalar('VALID/loss', loss.item(), global_step)
-            writer.add_scalar('VALID/recon', recon_loss_.item(), global_step)
-            writer.add_scalar('VALID/overlap', overlap_loss_.item(), global_step)
-            writer.add_scalar('VALID/perplexity', perplexity.item(), global_step)
-            writer.add_scalar('VALID/quant', qloss.item(), global_step)
-            writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
+            writer.add_scalar('VALID/mse', recon_loss_.item(), global_step)
+            writer.add_scalar('VALID/opi', overlap_loss_.item(), global_step)
+            if opt.quantize: writer.add_scalar('VALID/quant', qloss.item(), global_step)
+            if opt.quantize: writer.add_scalar('VALID/cbp', perplexity.item(), global_step)
+            if opt.quantize: writer.add_scalar('VALID/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+            if opt.quantize: writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
             writer.add_scalar('VALID/lr', optimizer.param_groups[0]['lr'], global_step)
 
 
@@ -531,6 +534,7 @@ for epoch in range(opt.num_epochs):
     with torch.no_grad():
         every_nepoch = 10
         if not epoch  % every_nepoch:
+            model.eval()
             # For evaluating the AP score, we get a batch from the validation dataset.
             fid = calculate_fid(test_dataloader, model, opt.batch_size, 25, opt.model_dir)
             print(f'FID Score: {fid}')

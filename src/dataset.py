@@ -36,13 +36,13 @@ def get_paths_with_properties_CLEVR(root_path, mode, max_objects=7):
             object_property = np.concatenate([object_property, 
                             np.eye(len(material_mapping))[material_mapping[object_info['material']]]])
             object_property = np.concatenate([object_property, [1]])
-            object_property = np.concatenate([object_property, object_info['3d_coords']])
+            # object_property = np.concatenate([object_property, object_info['3d_coords']])
             objects.append(object_property)
 
         for _ in range(max_objects - len(objects)):
             objects.append(np.zeros_like(object_property))
 
-        properties.append(np.array(objects, dtype='float32'))
+        properties.append(np.array(objects, dtype='float32')[:max_objects, ...])
     
     return paths, properties
 
