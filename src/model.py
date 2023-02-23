@@ -298,7 +298,7 @@ class SlotAttention(nn.Module):
         else: objects = k; scales = torch.ones_like(k)
         
         # Quantizing components----
-        qobjects, cbidxs, qloss, perplexity, slots  = self.slot_quantizer(objects, 
+        qobjects, cbidxs, qloss, perplexity, slots  = self.slot_quantizer(objects.clone().detach(), 
                                                                     loss_type = 1,
                                                                     MCsamples = MCsamples,
                                                                     update = self.restart_cbstats,
@@ -397,7 +397,6 @@ class SlotAttention(nn.Module):
             slots = self.step(slots, k, v, MCsamples, n_s, b)
 
         if self.implicit: slots = self.step(slots.detach(), k, v)
-
 
 
         # update slots ===================

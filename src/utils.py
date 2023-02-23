@@ -19,6 +19,9 @@ from torch import nn, einsum
 import torch.distributed as distributed
 
 from einops import rearrange, repeat
+import geomstats.backend as gs
+from geomstats.geometry.hypersphere import Hypersphere
+
 
 try:
     from torch.cuda import amp
@@ -52,6 +55,12 @@ def uniform_init(*shape):
     t = torch.empty(shape)
     nn.init.kaiming_uniform_(t)
     return t
+
+def hsphere_init(codebook_dim, emb_dim):
+    sphere = Hypersphere(dim=emb_dim - 1)
+    points_in_manifold = torch.Tensor(sphere.random_uniform(n_samples=codebook_dim))
+    return points_in_manifold
+
 
 def gumbel_noise(t):
     noise = torch.zeros_like(t).uniform_(0, 1)

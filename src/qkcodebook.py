@@ -2,9 +2,11 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from einops import rearrange, repeat
-from src.utils import (uniform_init, unique_sampling_fn, 
+from src.utils import (uniform_init, hsphere_init, unique_sampling_fn, 
                         get_euclidian_distance, sorting_idxs, 
                         get_cosine_distance, get_cb_variance)
+
+
 
 
 class QKCodebook(nn.Module):
@@ -12,7 +14,7 @@ class QKCodebook(nn.Module):
         super().__init__()
         self.dim = dim
         
-        self.register_buffer('mu_embeddings', uniform_init(codebook_size, dim))
+        self.register_buffer('mu_embeddings', hsphere_init(codebook_size, dim))
         self.register_buffer('sigma_embeddings', uniform_init(codebook_size, dim))
 
         self.fc1_w = nn.Parameter(uniform_init(codebook_size, dim, dim))

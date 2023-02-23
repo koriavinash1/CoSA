@@ -7,6 +7,7 @@ sbatch <<EOT
 #SBATCH --gres gpu:1               # gpu:n, where n = number of GPUs 
 #SBATCH --mem 32G                  # memory pool for all cores 
 #SBATCH --job-name='$1$2$9'
+#SBATCH --exclude=lory
 #SBATCH --output=slurm.%N.%j.log   # Standard output and error loga
 
 echo $1 $2 $3 $4 $5 $6 $7 $8 $9 ${10} ${11} ${12} ${13} ${14} ${15} ${16} ${17}
