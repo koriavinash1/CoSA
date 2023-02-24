@@ -165,7 +165,7 @@ class BaseVectorQuantizer(nn.Module):
 
         quantized = self.project_out(quantized)
         quantized = self.norm_out(quantized)
-        quantized = quantized.view(input_shape)
+        quantized = quantized.view(input_shape[0], input_shape[1], -1)
         return quantized, encoding_indices, encodings, slots, None
 
 

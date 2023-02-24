@@ -10,8 +10,8 @@ NAME=$9
 ITER=${10}
 
 NAME=$DATASET$VARIANT$NAME
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSTesting50'
-python /vol/biomedic3/agk21/testEigenSlots2/train.py \
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSBSA-Baseline'
+python /vol/biomedic3/agk21/testEigenSlots2/object_discovery.py \
                                             --dataset_name $DATASET \
                                             --variant $VARIANT \
                                             --exp_name $NAME \

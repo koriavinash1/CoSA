@@ -36,7 +36,7 @@ def get_paths_with_properties_CLEVR(root_path, mode, max_objects=7):
             object_property = np.concatenate([object_property, 
                             np.eye(len(material_mapping))[material_mapping[object_info['material']]]])
             object_property = np.concatenate([object_property, [1]])
-            # object_property = np.concatenate([object_property, object_info['3d_coords']])
+            object_property = np.concatenate([object_property, (np.array(object_info['3d_coords']) + 3.0)/6.0])
             objects.append(object_property)
 
         for _ in range(max_objects - len(objects)):
@@ -44,6 +44,7 @@ def get_paths_with_properties_CLEVR(root_path, mode, max_objects=7):
 
         properties.append(np.array(objects, dtype='float32')[:max_objects, ...])
     
+    properties = np.array(properties)
     return paths, properties
 
 
@@ -71,7 +72,7 @@ class DataGenerator(Dataset):
         self.class_info = class_info
 
         if self.properties:
-            self.files, self.properties = get_paths_with_properties_CLEVR(root, mode, max_objects)
+            self.files, self.properties_info = get_paths_with_properties_CLEVR(root, mode, max_objects)
         else:
             path = os.path.join(self.root_dir, self.mode)
             self.files = [str(p) for ext in EXTS for p in Path(f'{path}').glob(f'**/*.{ext}')]
@@ -97,12 +98,12 @@ class DataGenerator(Dataset):
         sample = {'image': image}
 
         if self.properties:
-            property_info = self.properties[index]
+            property_info = self.properties_info[index]
             property_info = torch.from_numpy(property_info)
             sample['properties'] = property_info
 
         if self.class_info:
-            target = int(path.split('_')[2])
+            target = int(path.split('/')[-1].split('_')[3])
             sample['target'] = target   
 
         return sample

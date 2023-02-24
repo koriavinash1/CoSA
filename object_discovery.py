@@ -132,8 +132,8 @@ elif opt.dataset_name == 'multi_dsprites':
 
 elif opt.dataset_name == 'objects_room':
     opt.variant ='default'
-    opt.encoder_res = 4
-    opt.decoder_res = 4
+    opt.encoder_res = 8
+    opt.decoder_res = 8
     opt.img_size = 32
     opt.max_slots = 16
     opt.num_slots = 6
@@ -144,8 +144,8 @@ elif opt.dataset_name == 'objects_room':
 
 elif opt.dataset_name == 'tetrominoes':
     opt.variant ='default'
-    opt.encoder_res = 4
-    opt.decoder_res = 4
+    opt.encoder_res = 8
+    opt.decoder_res = 8
     opt.img_size = 32
     opt.max_slots = 20
     opt.nunique_objects = 16
@@ -494,34 +494,37 @@ for epoch in range(opt.num_epochs):
 
     
 
-    lrscheduler.step(validation_stats['recon_loss'])
-    if min_recon_loss > validation_stats['recon_loss']:
-        counter = 0
-        min_recon_loss = validation_stats['recon_loss']
+    if epoch*train_epoch_size > opt.warmup_steps:
+        lrscheduler.step(validation_stats['recon_loss'])
+
+        
+        if min_recon_loss > validation_stats['recon_loss']:
+            counter = 0
+            min_recon_loss = validation_stats['recon_loss']
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optm_state_dict': optimizer.state_dict(),
+                'epoch': epoch,
+                'vstats': validation_stats,
+                'tstats': training_stats, 
+                }, os.path.join(opt.model_dir, f'discovery_best.pth'))
+        else:
+            counter +=1 
+            if counter > patience:
+                ckpt = torch.load(os.path.join(opt.model_dir, f'discovery_best.pth'))
+                model.load_state_dict(ckpt['model_state_dict'])
+            
+            if counter > 5*patience:
+                print('Early Stopping: --------------')
+                break
+
+
         torch.save({
             'model_state_dict': model.state_dict(),
-            'optm_state_dict': optimizer.state_dict(),
             'epoch': epoch,
             'vstats': validation_stats,
             'tstats': training_stats, 
-            }, os.path.join(opt.model_dir, f'discovery_best.pth'))
-    else:
-        counter +=1 
-        if counter > patience:
-            ckpt = torch.load(os.path.join(opt.model_dir, f'discovery_best.pth'))
-            model.load_state_dict(ckpt['model_state_dict'])
-        
-        if counter > 5*patience:
-            print('Early Stopping: --------------')
-            break
-
-
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'epoch': epoch,
-        'vstats': validation_stats,
-        'tstats': training_stats, 
-        }, os.path.join(opt.model_dir, f'discovery_last.pth'))
+            }, os.path.join(opt.model_dir, f'discovery_last.pth'))
 
 
 

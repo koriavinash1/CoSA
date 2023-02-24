@@ -42,7 +42,7 @@ print ('='*25)
 
 
 resolution = (exp_arguments['img_size'], exp_arguments['img_size'])
-opt.model_dir = exp_arguments['model_dir']
+opt.model_dir = exp_arguments['model_dir'].replace('ObjectDiscovery', 'Reasoning')
 
 
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
@@ -77,10 +77,14 @@ model = SlotAttentionReasoning(resolution,
                                     exp_arguments['temperature'],
                                     exp_arguments['kld_scale']).to(device)
 
+
 ckpt=torch.load(os.path.join(opt.model_dir, 'discovery_best.pth' ))
-model.encoder_cnn.load_state_dict(ckpt['encoder_cnn'])
-model.decoder_cnn.load_state_dict(ckpt['decoder_cnn'])
-model.slot_attention.load_state_dict(ckpt['slot_attention'])
+keys = ckpt['model_state_dict'].keys()
+
+model.encoder_cnn.load_state_dict({k[12:]: ckpt['model_state_dict'][k] for k in keys if k.__contains__('encoder_cnn')})
+model.decoder_cnn.load_state_dict({k[12:]: ckpt['model_state_dict'][k] for k in keys if k.__contains__('decoder_cnn')})
+model.slot_attention.load_state_dict({k[15:]: ckpt['model_state_dict'][k] for k in keys if k.__contains__('slot_attention')})
+model.device = device
 
 params = [{'params': model.parameters()}]
 

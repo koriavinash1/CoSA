@@ -1,6 +1,6 @@
 import torch
+import os
 import random
-from random import random
 from torch import nn
 import numpy as np
 from contextlib import contextmanager, ExitStack
@@ -123,6 +123,17 @@ def all_gather_variably_sized(x, sizes, dim = 0):
 
     distributed.barrier()
     return all_x
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True
+
 
 def sample_vectors_distributed(local_samples, num):
     local_samples = rearrange(local_samples, '1 ... -> ...')

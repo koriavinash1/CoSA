@@ -23,36 +23,40 @@
 
 
 # Euclidian codebook
-# ./slurm-wrapper.sh clevr hans3 True False False True True True test 5
+./slurm-wrapper.sh clevr hans3 True False False True False True Euclidian 5
+./slurm-wrapper.sh clevr default True False False True False True Euclidian 5
+./slurm-wrapper.sh bitmoji default True False False True False True Euclidian 5
+./slurm-wrapper.sh objects_room default True False False True False True Euclidian 5
+./slurm-wrapper.sh tetrominoes default True False False True False True Euclidian 5
+./slurm-wrapper.sh ffhq default True False False True False True Euclidian 5
+
 # ./slurm-wrapper.sh clevr hans7 True False False True True True test 5
-# ./slurm-wrapper.sh clevr default True False False True True True test 5
-# ./slurm-wrapper.sh bitmoji default True False False True True True test 5
 # ./slurm-wrapper.sh multi_dsprites colored_on_colored True False False True True True test 5
 # ./slurm-wrapper.sh multi_dsprites colored_on_grayscale True False False True True True test 5
-# ./slurm-wrapper.sh objects_room default True False False True True True test 5
-# ./slurm-wrapper.sh tetrominoes default True False False True True True test 5
-# ./slurm-wrapper.sh ffhq default True False False True True True test 5
 
 
 # Cosine codebook
-./slurm-wrapper.sh clevr hans3 True True False True True True test 5
+./slurm-wrapper.sh clevr hans3 True True False True False True Cosine 5
+./slurm-wrapper.sh clevr default True True False True False True Cosine 5
+./slurm-wrapper.sh bitmoji default True True False True False True Cosine 5
+./slurm-wrapper.sh objects_room default True True False True False True Cosine 5
+./slurm-wrapper.sh tetrominoes default True True False True False True Cosine 5
+./slurm-wrapper.sh ffhq default True True False True False True Cosine 5
+
 # ./slurm-wrapper.sh clevr hans7 True True False True True True test 5
-# ./slurm-wrapper.sh clevr default True True False True True True test 5
-./slurm-wrapper.sh bitmoji default True True False True True True test 5
 # ./slurm-wrapper.sh multi_dsprites colored_on_colored True True False True True True test 5
 # ./slurm-wrapper.sh multi_dsprites colored_on_grayscale True True False True True True test 5
-./slurm-wrapper.sh objects_room default True True False True True True test 5
-./slurm-wrapper.sh tetrominoes default True True False True True True test 5
-./slurm-wrapper.sh ffhq default True True False True True True test 5
 
 
 # Gumble codebook
-# ./slurm-wrapper.sh clevr hans3 True False True True True True test 5
+./slurm-wrapper.sh clevr hans3 True False True True False True Gumble 5
+./slurm-wrapper.sh clevr default True False True True False True Gumble 5
+./slurm-wrapper.sh bitmoji default True False True True False True Gumble 5
+./slurm-wrapper.sh objects_room default True False True True False True Gumble 5
+./slurm-wrapper.sh tetrominoes default True False True True False True Gumble 5
+./slurm-wrapper.sh ffhq default True False True True False True Gumble 5
+
+
 # ./slurm-wrapper.sh clevr hans7 True False True True True True test 5
-# ./slurm-wrapper.sh clevr default True False True True True True test 5
-# ./slurm-wrapper.sh bitmoji default True False True True True True test 5
 # ./slurm-wrapper.sh multi_dsprites colored_on_colored True False True True True True test 5
 # ./slurm-wrapper.sh multi_dsprites colored_on_grayscale True False True True True True test 5
-# ./slurm-wrapper.sh objects_room default True False True True True True test 5
-# ./slurm-wrapper.sh tetrominoes default True False True True True True test 5
-# ./slurm-wrapper.sh ffhq default True False True True True True test 5

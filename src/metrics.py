@@ -102,10 +102,10 @@ def average_precision_clevr(pred, attributes, distance_threshold):
 
     def process_targets(target):
         """Unpacks the target into the CLEVR properties."""
-        object_size = np.argmax(target[:3])
-        shape = np.argmax(target[3:5])
-        material = np.argmax(target[5:7])
-        color = np.argmax(target[7:15])
+        object_size = np.argmax(target[:2])
+        shape = np.argmax(target[2:5])
+        color = np.argmax(target[5:13])
+        material = np.argmax(target[13:15])
         real_obj = target[15]
         coords = target[16:]
         return coords, object_size, material, shape, color, real_obj

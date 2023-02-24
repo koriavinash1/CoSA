@@ -40,7 +40,10 @@ def reorder_slots(slots, slots_mu, cidxs, scales = None, ns=10):
             
             counter += 1
 
-    return slots[:, :ns, :], slots_mu[:, :ns, :], cidxs[:, :ns]
+
+    slots, slots_mu, cidxs = slots[:, :ns, :], slots_mu[:, :ns, :], cidxs[:, :ns]
+    
+    return slots, slots_mu, cidxs
 
 
 class SlotAttention(nn.Module):
@@ -665,7 +668,7 @@ class SlotAttentionClassifier(nn.Module):
     # In case of CLEVR: (coords=3) + (color=8) + (size=2) + (material=2) + (shape=3) + (real=1) = 19
     self.nproperties = nproperties
 
-    self.encoder_cnn = Encoder(self.resolution, self.hid_dim)
+    self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
     self.slot_attention = SlotAttention(
                                 num_slots=self.num_slots,
                                 dim=hid_dim,
@@ -797,8 +800,8 @@ class SlotAttentionReasoning(nn.Module):
         self.nclasses = nclasses
         self.nproperties = nproperties
         
-        self.encoder_cnn = Encoder(self.resolution, self.hid_dim)
-        self.decoder_cnn = Decoder(self.hid_dim, self.resolution)
+        self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+        self.decoder_cnn = Decoder(self.hid_dim, self.resolution, kernel_size)
 
 
         self.slot_attention = SlotAttention(
@@ -863,3 +866,30 @@ class SlotAttentionReasoning(nn.Module):
 
         return recon_combined, predictions, logits, recons, masks, slots, cbidxs, qloss, perplexity
 
+
+
+
+class DefaultCNN(nn.Module):
+    def __init__(self,
+                    resolution,
+                    hid_dim,
+                    kernel_size=5,
+                    encoder_res=4,
+                    nclasses = 3):
+        super().__init__()
+
+        self.resolution = resolution
+        self.hid_dim = hid_dim
+        self.encoder_res = encoder_res
+        self.nclasses = nclasses 
+
+        self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+
+        self.classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(hid_dim, self.nclasses))
+
+    def forward(self, x, epoch=0, batch=0):
+        features = self.encoder_cnn(x)
+        avg_pooled = F.adaptive_avg_pool2d(features, (1,1))
+        return self.classifier(avg_pooled.squeeze())
