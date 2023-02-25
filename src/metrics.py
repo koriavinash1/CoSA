@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import os
 import numpy as np
 import torchvision
@@ -7,6 +8,51 @@ from tqdm import tqdm
 from pytorch_fid import fid_score
 from sklearn.metrics import accuracy_score
 
+
+class SoftDiceLossV1(nn.Module):
+    '''
+    soft-dice loss, useful in binary segmentation
+    '''
+    def __init__(self,
+                 p=1,
+                 smooth=0.001):
+        super(SoftDiceLossV1, self).__init__()
+        self.p = p
+        self.smooth = smooth
+
+    def forward(self, logits, labels):
+        '''
+        inputs:
+            logits: tensor of shape (N, H, W, ...)
+            label: tensor of shape(N, H, W, ...)
+        output:
+            loss: tensor of shape(1, )
+        '''
+        probs = torch.sigmoid(logits)
+        numer = (probs * labels).sum()
+        denor = (probs.pow(self.p) + labels.pow(self.p)).sum()
+        loss = (2 * numer + self.smooth) / (denor + self.smooth)
+        return loss
+    
+_dice_loss_ = SoftDiceLossV1()
+
+def dice_loss(masks):
+    shape = masks.shape
+    idxs = np.arange(shape[1])
+
+    masks = (masks - masks.min(dim=1, keepdim=True)[0] + 1e-4)/(1e-4 + masks.max(dim=1, keepdim=True)[0] - masks.min(dim=1, keepdim=True)[0])
+    gt_masks = masks.clone().detach()
+    gt_masks[gt_masks >= 0.5] = 1.0
+    gt_masks[gt_masks < 0.5] = 0.0
+    
+    loss = 0
+    for i in idxs:
+        _idxs_ = list(np.arange(shape[1]))
+        del _idxs_[i]
+        loss += _dice_loss_(masks[:, _idxs_, ...].reshape(-1, shape[2], shape[3], shape[4]),
+            gt_masks[:, i, ...].unsqueeze(1).repeat(1, len(idxs) -1, 1, 1, 1).reshape(-1, shape[2], shape[3], shape[4]))
+
+    return loss*1.0/len(idxs)
 
 @torch.no_grad()
 def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/CLEVR/FID' ):

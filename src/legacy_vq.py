@@ -248,7 +248,7 @@ class BaseVectorQuantizer(nn.Module):
             if (logits is None):
                 loss = 0
             else:
-                print (logits.min(), logits.max(), logits.mean(), '===========')
+                # print (logits.min(), logits.max(), logits.mean(), '===========')
                 qy = F.softmax(logits, dim=-1)
                 loss = self.kld_scale * torch.sum(qy * torch.log(qy * self._num_embeddings + 1e-10), dim=-1).mean()
 

@@ -318,7 +318,7 @@ for epoch in range(opt.num_epochs):
             model.eval()
 
             pred = []; attributes = []
-            for batch_num, samples in tqdm(test_dataloader, desc='calculating Acc-F1 '):
+            for batch_num, samples in tqdm(enumerate(test_dataloader), desc='calculating Acc-F1 '):
                 image = samples['image'].to(model.device)
                 targets = samples['target'].to(model.device)
 

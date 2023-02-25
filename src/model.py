@@ -6,7 +6,7 @@ from einops import rearrange
 from src.vq import VectorQuantizer 
 from src.legacy_vq import VectorQuantizer as legacy_quantizer
 from src.hpenalty import hessian_penalty
-from src.utils import compute_eigen
+from src.utils import compute_eigen, uniform_init
 from geomstats.geometry.hypersphere import Hypersphere
 from einops import rearrange, repeat
 
@@ -760,29 +760,13 @@ class ReasoningAttention(nn.Module):
 
 
 class SlotAttentionReasoning(nn.Module):
-    def __init__(self, resolution, 
-                        num_slots, 
-                        num_iterations, 
-                        hid_dim,
-                        nproperties, 
-                        nclasses,
-                        max_slots=64, 
-                        nunique_slots=10,
-                        quantize=False,
-                        cosine=False, 
-                        cb_decay=0.99,
-                        encoder_res=4,
-                        decoder_res=4,
-                        variational=False, 
-                        binarize=False,
-                        cb_qk=False,
-                        eigen_quantizer=False,
-                        restart_cbstats=False,
-                        implicit=True,
-                        gumble=False,
-                        temperature=1.0,
-                        kld_scale=1.0
-                        ):
+    def __init__(self,
+                    slot_dim, 
+                    max_slots,
+                    nproperties, 
+                    nclasses,
+                    hid_dim=64
+                    ):
         """Builds the Slot Attention-based auto-encoder.
         Args:
         resolution: Tuple of integers specifying width and height of input image.
@@ -791,82 +775,47 @@ class SlotAttentionReasoning(nn.Module):
         """
         super().__init__()
         self.hid_dim = hid_dim
-        self.resolution = resolution
-        self.num_slots = num_slots
-        self.num_iterations = num_iterations
-
-        # nclasses: numpber of nodes as outputs
-        # In case of CLEVR: (coords=3) + (color=8) + (size=2) + (material=2) + (shape=3) + (real=1) = 19
         self.nclasses = nclasses
-        self.nproperties = nproperties
-        
-        self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
-        self.decoder_cnn = Decoder(self.hid_dim, self.resolution, kernel_size)
+        self.max_slots = max_slots
+
+        self.fc1_w = nn.Parameter(uniform_init(max_slots, slot_dim, hid_dim))
+        self.fc1_b = nn.Parameter(uniform_init(max_slots, hid_dim))
+
+        self.fc2_w = nn.Parameter(uniform_init(max_slots, hid_dim, nproperties))
+        self.fc2_b = nn.Parameter(uniform_init(max_slots, nproperties))
 
 
-        self.slot_attention = SlotAttention(
-            num_slots=self.num_slots,
-            dim=hid_dim,
-            iters = self.num_iterations,
-            eps = 1e-8, 
-            hidden_dim = 128,
-            nunique_slots=nunique_slots,
-            quantize = quantize,
-            max_slots=max_slots,
-            cosine=cosine,
-            cb_decay=cb_decay,
-            encoder_intial_res=(encoder_res, encoder_res),
-            decoder_intial_res=(decoder_res, decoder_res),
-            cb_variational=variational,
-            cov_binarize=binarize,
-            cb_querykey=cb_qk,
-            eigen_quantizer=eigen_quantizer,
-            restart_cbstats=restart_cbstats,
-            implicit=implicit,
-            gumble=gumble,
-            temperature=temperature,
-            kld_scale=kld_scale)
-
-        
         self.property_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, self.nproperties),
+                                        nn.Linear(hid_dim, nproperties),
                                         nn.Sigmoid())
 
 
-
-        self.reasoning_attention = ReasoningAttention(max_slots, hid_dim)
-        self.reasoning_classifier = nn.Sequential(nn.Linear(max_slots, hid_dim),
-                                        nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, self.nclasses),
-                                        nn.Softmax())
+        self.reasoning_classifier = nn.Sequential(nn.Linear(nproperties, nclasses))
 
 
-    def forward(self, image, num_slots=None, epoch=0, batch=0):
-        # `image` has shape: [batch_size, num_channels, width, height].
+    def forward(self, slots, cidxs, epoch=0, batch=0):
+        
+        shape = cidxs.shape
+        encodings = torch.zeros(np.prod(shape), self.max_slots, device=slots.device)
+        encodings.scatter_(1, cidxs.reshape(-1, 1), 1)
 
-        # Convolutional encoder with position embedding.
-        x = self.encoder_cnn(image)  # CNN Backbone.
-        # `x` has shape: [batch_size, input_size, width, height].
+        # weights for transformations =======================
+        encodings = encodings.view(shape[0], shape[1], -1)
+        fc1w = torch.einsum('bnd,dgk->bngk', encodings, self.fc1_w)
+        fc1b = torch.einsum('bnd,dg->bng',encodings, self.fc1_b)
 
-        # Slot Attention module.
-        slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, 
-                                                                        num_slots, 
-                                                                        epoch, 
-                                                                        batch, 
-                                                                        images=image)
-        # `slots` has shape: [batch_size, num_slots, slot_size].
-        # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
+        fc2w = torch.einsum('bnd,dgk->bngk',encodings, self.fc2_w)
+        fc2b = torch.einsum('bnd,dg->bng',encodings, self.fc2_b)
 
+        # apply transformation ===============
+        properties = F.relu(torch.einsum('bnd,bndw->bnw', slots, fc1w) + fc1b)
+        properties = F.relu(torch.einsum('bnd,bndw->bnw', properties, fc2w) + fc2b) 
 
-        res_cb_samples = self.reasoning_attention(self.slot_attention.slot_quantizer._embedding.weight,
-                                                        cbidxs)
-        logits = self.reasoning_classifier(res_cb_samples)
+        properties = properties.sum(1)
+        class_logits = self.reasoning_classifier(properties)
 
-
-        return recon_combined, predictions, logits, recons, masks, slots, cbidxs, qloss, perplexity
-
-
+        return class_logits
 
 
 class DefaultCNN(nn.Module):

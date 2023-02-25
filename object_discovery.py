@@ -2,8 +2,8 @@ import os
 import argparse
 from src.dataset import DataGenerator
 from src.model import SlotAttentionAutoEncoder
-from src.metrics import calculate_fid
-from src.utils import get_cb_variance
+from src.metrics import calculate_fid, dice_loss
+from src.utils import seed_everything, get_cb_variance, create_histogram, linear_warmup, visualize
 
 from tqdm import tqdm
 import time, math
@@ -83,6 +83,7 @@ parser.add_argument('--decay_steps', default=100000, type=int, help='Number of s
 
 opt = parser.parse_args()
 opt.model_dir = os.path.join(opt.model_dir, 'ObjectDiscovery', opt.exp_name)
+seed_everything(exp_arguments['seed'])
 
 # dataset path setting =====================================
 
@@ -247,95 +248,6 @@ opt.log_interval = train_epoch_size // 5
 
 
 
-def create_histogram(k, img_size, cbidx):
-    image = np.zeros((2*k + 2, 2*k + 2, 3), dtype='uint8')
-    
-    cbidx = cbidx.detach().cpu().numpy()
-    for uidx in np.unique(cbidx):
-        count = np.sum(cbidx == uidx)
-        image[:int(2*count), int(2*uidx):int(2*uidx+2), :] = (125, 255, 25)
-    
-    image = cv2.resize(image, img_size, cv2.INTER_NEAREST)
-    image = image*1.0/255
-    image = np.flipud(image)
-    return 1 - image.transpose(2, 0, 1)
-
-
-def visualize(image, recon_orig, attns, cbidxs, N=8):
-    _, _, H, W = image.shape
-    attns = attns.permute(0, 1, 4, 2, 3)
-    image = image[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
-    recon_orig = recon_orig[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
-    attns = attns[:N].expand(-1, -1, 3, H, W)
-
-    histograms = np.array([create_histogram(opt.max_slots, (W, H), idxs) for idxs in cbidxs[:N]])
-    histograms = torch.from_numpy(histograms).to(image.device).type(image.dtype).unsqueeze(1)
-    
-    return torch.cat((image, recon_orig, attns, histograms), dim=1).view(-1, 3, H, W)
-
-
-def linear_warmup(step, start_value, final_value, start_step, final_step):
-    
-    assert start_value <= final_value
-    assert start_step <= final_step
-    
-    if step < start_step:
-        value = start_value
-    elif step >= final_step:
-        value = final_value
-    else:
-        a = final_value - start_value
-        b = start_value
-        progress = (step + 1 - start_step) / (final_step - start_step)
-        value = a * progress + b
-    
-    return value
-
-
-class SoftDiceLossV1(nn.Module):
-    '''
-    soft-dice loss, useful in binary segmentation
-    '''
-    def __init__(self,
-                 p=1,
-                 smooth=0.001):
-        super(SoftDiceLossV1, self).__init__()
-        self.p = p
-        self.smooth = smooth
-
-    def forward(self, logits, labels):
-        '''
-        inputs:
-            logits: tensor of shape (N, H, W, ...)
-            label: tensor of shape(N, H, W, ...)
-        output:
-            loss: tensor of shape(1, )
-        '''
-        probs = torch.sigmoid(logits)
-        numer = (probs * labels).sum()
-        denor = (probs.pow(self.p) + labels.pow(self.p)).sum()
-        loss = (2 * numer + self.smooth) / (denor + self.smooth)
-        return loss
-    
-_dice_loss_ = SoftDiceLossV1()
-
-def dice_loss(masks):
-    shape = masks.shape
-    idxs = np.arange(shape[1])
-
-    masks = (masks - masks.min(dim=1, keepdim=True)[0] + 1e-4)/(1e-4 + masks.max(dim=1, keepdim=True)[0] - masks.min(dim=1, keepdim=True)[0])
-    gt_masks = masks.clone().detach()
-    gt_masks[gt_masks >= 0.5] = 1.0
-    gt_masks[gt_masks < 0.5] = 0.0
-    
-    loss = 0
-    for i in idxs:
-        _idxs_ = list(np.arange(shape[1]))
-        del _idxs_[i]
-        loss += _dice_loss_(masks[:, _idxs_, ...].reshape(-1, shape[2], shape[3], shape[4]),
-            gt_masks[:, i, ...].unsqueeze(1).repeat(1, len(idxs) -1, 1, 1, 1).reshape(-1, shape[2], shape[3], shape[4]))
-
-    return loss*1.0/len(idxs)
 
 
 def training_step(model, optimizer, epoch, opt):
@@ -382,7 +294,7 @@ def training_step(model, optimizer, epoch, opt):
 
     with torch.no_grad():
         attns = recons * masks + (1 - masks)
-        vis_recon = visualize(image, recon_combined, attns, cbidxs, N=32)
+        vis_recon = visualize(image, recon_combined, attns, cbidxs, opt.max_slots, N=32)
         grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 3, pad_value=0.2)[:, 2:-2, 2:-2]
         writer.add_image('TRAIN/recon_epoch={:03}'.format(epoch+1), grid)
 
@@ -436,7 +348,7 @@ def validation_step(model, optimizer, epoch, opt):
 
 
     attns = recons * masks + (1 - masks)
-    vis_recon = visualize(image, recon_combined, attns, cbidxs, N=32)
+    vis_recon = visualize(image, recon_combined, attns, cbidxs, opt.max_slots, N=32)
     grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 3, pad_value=0.2)[:, 2:-2, 2:-2]
     writer.add_image('VALID/recon_epoch={:03}'.format(epoch+1), grid)
 

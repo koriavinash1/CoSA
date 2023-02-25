@@ -209,6 +209,7 @@ test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_siz
 
 train_epoch_size = min(50000, len(train_dataloader))
 val_epoch_size = min(10000, len(val_dataloader))
+test_epoch_size = min(10000, len(test_dataloader))
 
 # ======================================================
 
@@ -385,7 +386,7 @@ for epoch in range(opt.num_epochs):
     print ('='*150)
     
 
-     # warm up learning rate setup
+    # warm up learning rate setup
     if epoch*train_epoch_size < opt.warmup_steps: 
         learning_rate = opt.learning_rate *(epoch * train_epoch_size / opt.warmup_steps)
     else:
@@ -412,16 +413,16 @@ for epoch in range(opt.num_epochs):
                 ckpt = torch.load(os.path.join(opt.model_dir, f'setprediction_best.pth'))
                 model.load_state_dict(ckpt['model_state_dict'])
             
-            # if counter > 5*patience:
-            #     print('Early Stopping: --------------')
-            #     break
+            if counter > 5*patience:
+                print('Early Stopping: --------------')
+                break
 
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'epoch': epoch,
-            'vstats': validation_stats,
-            'tstats': training_stats, 
-            }, os.path.join(opt.model_dir, f'setprediction_last.pth'))
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'epoch': epoch,
+        'vstats': validation_stats,
+        'tstats': training_stats, 
+        }, os.path.join(opt.model_dir, f'setprediction_last.pth'))
 
 
 

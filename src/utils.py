@@ -6,6 +6,7 @@ import numpy as np
 from contextlib import contextmanager, ExitStack
 import torch.nn.functional as F
 
+import cv2
 import scipy
 from scipy.sparse.linalg import eigsh
 from sklearn.cluster import KMeans, MiniBatchKMeans
@@ -34,6 +35,51 @@ def set_requires_grad(model, bool):
         p.requires_grad = bool
     return model
 
+
+
+def create_histogram(k, img_size, cbidx):
+    image = np.zeros((2*k + 2, 2*k + 2, 3), dtype='uint8')
+    
+    cbidx = cbidx.detach().cpu().numpy()
+    for uidx in np.unique(cbidx):
+        count = np.sum(cbidx == uidx)
+        image[:int(2*count), int(2*uidx):int(2*uidx+2), :] = (125, 255, 25)
+    
+    image = cv2.resize(image, img_size, cv2.INTER_NEAREST)
+    image = image*1.0/255
+    image = np.flipud(image)
+    return 1 - image.transpose(2, 0, 1)
+
+
+def visualize(image, recon_orig, attns, cbidxs, max_slots, N=8):
+    _, _, H, W = image.shape
+    attns = attns.permute(0, 1, 4, 2, 3)
+    image = image[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
+    recon_orig = recon_orig[:N].expand(-1, 3, H, W).unsqueeze(dim=1)
+    attns = attns[:N].expand(-1, -1, 3, H, W)
+
+    histograms = np.array([create_histogram(max_slots, (W, H), idxs) for idxs in cbidxs[:N]])
+    histograms = torch.from_numpy(histograms).to(image.device).type(image.dtype).unsqueeze(1)
+    
+    return torch.cat((image, recon_orig, attns, histograms), dim=1).view(-1, 3, H, W)
+
+
+def linear_warmup(step, start_value, final_value, start_step, final_step):
+    
+    assert start_value <= final_value
+    assert start_step <= final_step
+    
+    if step < start_step:
+        value = start_value
+    elif step >= final_step:
+        value = final_value
+    else:
+        a = final_value - start_value
+        b = start_value
+        progress = (step + 1 - start_step) / (final_step - start_step)
+        value = a * progress + b
+    
+    return value
 
 
 def exists(val):
