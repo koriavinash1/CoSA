@@ -9,54 +9,91 @@
 # NAME=$9
 # ITER=${10}
 
-# ./slurm-wrapper.sh clevr hans3 False False False False False False test 3
-# ./slurm-wrapper.sh clevr hans3 False False False False False False test 5
-# ./slurm-wrapper.sh clevr hans7 False False False False False False test 5
-# ./slurm-wrapper.sh clevr default False False False False False False test 5
-# ./slurm-wrapper.sh bitmoji default False False False False False False test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_colored False False False False False False test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_grayscale False False False False False False test 5
-# ./slurm-wrapper.sh objects_room default False False False False False False test 5
-# ./slurm-wrapper.sh tetrominoes default False False False False False False test 5
-# ./slurm-wrapper.sh ffhq default False False False False False False test 5
+# =============================================================
+TASKTYPE='OD'
+# Baseline ------------------------
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 False False False False False False test 3
+# ./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False test 5
+# ./slurm-wrapper.sh $TASKTYPE bitmoji default False False False False False False test 5
+# ./slurm-wrapper.sh $TASKTYPE objects_room default False False False False False False test 5
+# ./slurm-wrapper.sh $TASKTYPE tetrominoes default False False False False False False test 5
+# ./slurm-wrapper.sh $TASKTYPE ffhq default False False False False False False test 5
 
 
 
 # Euclidian codebook
-./slurm-wrapper.sh clevr hans3 True False False True False True Euclidian 5
-./slurm-wrapper.sh clevr default True False False True False True Euclidian 5
-./slurm-wrapper.sh bitmoji default True False False True False True Euclidian 5
-./slurm-wrapper.sh objects_room default True False False True False True Euclidian 5
-./slurm-wrapper.sh tetrominoes default True False False True False True Euclidian 5
-./slurm-wrapper.sh ffhq default True False False True False True Euclidian 5
+./slurm-wrapper.sh $TASKTYPE clevr hans3 True False False True False True Euclidian 5
+./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian 5
+./slurm-wrapper.sh $TASKTYPE bitmoji default True False False True False True Euclidian 5
+# ./slurm-wrapper.sh $TASKTYPE objects_room default True False False True False True Euclidian 5
+# ./slurm-wrapper.sh $TASKTYPE tetrominoes default True False False True False True Euclidian 5
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True False False True False True Euclidian 5
 
-# ./slurm-wrapper.sh clevr hans7 True False False True True True test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_colored True False False True True True test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_grayscale True False False True True True test 5
+
 
 
 # Cosine codebook
-./slurm-wrapper.sh clevr hans3 True True False True False True Cosine 5
-./slurm-wrapper.sh clevr default True True False True False True Cosine 5
-./slurm-wrapper.sh bitmoji default True True False True False True Cosine 5
-./slurm-wrapper.sh objects_room default True True False True False True Cosine 5
-./slurm-wrapper.sh tetrominoes default True True False True False True Cosine 5
-./slurm-wrapper.sh ffhq default True True False True False True Cosine 5
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True True False True False True Cosine 5
+# ./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine 5
+# ./slurm-wrapper.sh $TASKTYPE bitmoji default True True False True False True Cosine 5
+# ./slurm-wrapper.sh $TASKTYPE objects_room default True True False True False True Cosine 5
+# ./slurm-wrapper.sh $TASKTYPE tetrominoes default True True False True False True Cosine 5
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True True False True False True Cosine 5
 
-# ./slurm-wrapper.sh clevr hans7 True True False True True True test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_colored True True False True True True test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_grayscale True True False True True True test 5
 
 
 # Gumble codebook
-./slurm-wrapper.sh clevr hans3 True False True True False True Gumble 5
-./slurm-wrapper.sh clevr default True False True True False True Gumble 5
-./slurm-wrapper.sh bitmoji default True False True True False True Gumble 5
-./slurm-wrapper.sh objects_room default True False True True False True Gumble 5
-./slurm-wrapper.sh tetrominoes default True False True True False True Gumble 5
-./slurm-wrapper.sh ffhq default True False True True False True Gumble 5
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False True True False True Gumble 5
+./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble 5
+./slurm-wrapper.sh $TASKTYPE bitmoji default True False True True False True Gumble 5
+./slurm-wrapper.sh $TASKTYPE objects_room default True False True True False True Gumble 5
+# ./slurm-wrapper.sh $TASKTYPE tetrominoes default True False True True False True Gumble 5
+./slurm-wrapper.sh $TASKTYPE ffhq default True False True True False True Gumble 5
 
 
-# ./slurm-wrapper.sh clevr hans7 True False True True True True test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_colored True False True True True True test 5
-# ./slurm-wrapper.sh multi_dsprites colored_on_grayscale True False True True True True test 5
+# =========================================================================
+TASKTYPE='SP'
+# Baseline ------------------------
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 False False False
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 False False False
+# ./slurm-wrapper.sh $TASKTYPE ffhq default False False False
+
+# Euclidian codebook
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False False
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True False False
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True False False
+
+# Cosine codebook
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True True False
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True True False
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True True False
+
+# Gumble codebook
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False True
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True False True
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True False True
+
+
+
+# =========================================================================
+TASKTYPE='RE'
+
+#  Baseline ------------------------
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 False False False default
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 False False False default
+# ./slurm-wrapper.sh $TASKTYPE ffhq default False False False default
+
+# Euclidian codebook
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False False default
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True False False default
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True False False default
+
+# Cosine codebook
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True True False default
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True True False default
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True True False default
+
+# Gumble codebook
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False True default
+# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True False True default
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True False True default

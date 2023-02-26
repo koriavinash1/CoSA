@@ -1,7 +1,7 @@
 import os
 import argparse
 from src.dataset import *
-from src.model import SlotAttentionReasoning, SlotAttentionAutoEncoder
+from src.model import SetPredictor, SlotAttentionAutoEncoder
 from src.metrics import average_precision_clevr, accuracy, dice_loss, calculate_fid
 from src.utils import seed_everything, get_cb_variance, create_histogram, linear_warmup, visualize
 
@@ -30,9 +30,7 @@ def str2bool(v):
 parser.add_argument('--batch_size', default=32, type=int)
 parser.add_argument('--learning_rate', default=0.001, type=float)
 parser.add_argument('--nproperties', default=19, type=int)
-parser.add_argument('--nclasses', default=3, type=int)
 parser.add_argument('--config', type=str)
-parser.add_argument('--reasoning_type', default='default', type=str)
 
 
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
@@ -59,32 +57,9 @@ seed_everything(exp_arguments['seed'])
 if exp_arguments['dataset_name'] == 'clevr':
     opt.nproperties = 19
 
-    if exp_arguments['variant'] == 'hans3':
-        opt.nclasses = 3
-    elif exp_arguments['variant'] == 'hans7':
-        opt.nclasses = 7
-
 elif exp_arguments['dataset_name'] == 'ffhq':
     opt.nproperties = 21
-    opt.nclasses = 2
 
-elif exp_arguments['dataset_name'] == 'floatingMNIST':
-    opt.nproperties = 10
-    if exp_arguments['variant'] == 'n2':
-        if opt.reasoning_type == 'diff':
-            opt.nclasses = 10
-        elif opt.reasoning_type == 'mixed':
-            opt.nclasses = 25
-        else:
-            opt.nclasses = 19
-
-    elif exp_arguments['variant'] == 'n3':
-        if opt.reasoning_type == 'diff':
-            opt.nclasses = 28
-        elif opt.reasoning_type == 'mixed':
-            opt.nclasses = 38
-        else:
-            opt.nclasses = 28
 else:
     raise ValueError('Invalid dataset found')
 
@@ -94,7 +69,7 @@ else:
 
 
 resolution = (exp_arguments['img_size'], exp_arguments['img_size'])
-opt.model_dir = exp_arguments['model_dir'].replace('ObjectDiscovery', 'Reasoning')
+opt.model_dir = exp_arguments['model_dir'].replace('ObjectDiscovery', 'SetPrediction')
 
 
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
@@ -142,44 +117,93 @@ AEmodel.load_state_dict(ckpt['model_state_dict'])
 AEmodel.device = device
 
 
-Rmodel = SlotAttentionReasoning(slot_dim=exp_arguments['hid_dim'],
-                                    max_slots=exp_arguments['max_slots'],
-                                    nproperties=opt.nproperties,
-                                    nclasses=opt.nclasses).to(device)
+Smodel = SetPredictor(exp_arguments['hid_dim'],
+                        nproperties=opt.nproperties).to(device)
 
 
 # ===========================================
 # Optimizer setup
-finetune_factor = 0.01
-# AEoptimizer = optim.Adam(AEmodel.parameters(), lr=finetune_factor*opt.learning_rate)
-Roptimizer = optim.Adam(list(AEmodel.parameters()) + list(Rmodel.parameters()), lr=opt.learning_rate)
+optimizer = optim.Adam(list(AEmodel.parameters()) + list(Smodel.parameters()), lr=opt.learning_rate)
+lrscheduler = ReduceLROnPlateau(optimizer, 'min')
 
-Rlrscheduler = ReduceLROnPlateau(Roptimizer, 'min')
-# AElrscheduler = ReduceLROnPlateau(AEoptimizer, 'min')
+# ===========================================
+def hungarian_huber_loss(x, y):
+    """
+    code conversion from: https://github.com/google-research/google-research/blob/c3bef5045a2d4777a80a1fb333d31e03474222fb/slot_attention/utils.py#L26
+    
+    Huber loss for sets, matching elements with the Hungarian algorithm.
+    This loss is used as reconstruction loss in the paper 'Deep Set Prediction
+    Networks' https://arxiv.org/abs/1906.06565, see Eq. 2. For each element in the
+    batches we wish to compute min_{pi} ||y_i - x_{pi(i)}||^2 where pi is a
+    permutation of the set elements. We first compute the pairwise distances
+    between each point in both sets and then match the elements using the scipy
+    implementation of the Hungarian algorithm. This is applied for every set in
+    the two batches. Note that if the number of points does not match, some of the
+    elements will not be matched. As distance function we use the Huber loss.
+    Args:
+    x: Batch of sets of size [batch_size, n_points, dim_points]. Each set in the
+        batch contains n_points many points, each represented as a vector of
+        dimension dim_points.
+    y: Batch of sets of size [batch_size, n_points, dim_points].
+    Returns:
+    Average distance between all sets in the two batches.
+    """
+
+    # adjust shape for x and y
+    ns = x.shape[1]
+    x = x.unsqueeze(1).repeat(1, ns, 1, 1)
+    y = y.unsqueeze(2).repeat(1, 1, ns, 1)
+    
+    # pairwise_cost = F.huber_loss(x, y, reduction='none')
+    # pairwise_cost = F.huber_loss(x, y, reduction='none')
+    pairwise_cost = F.binary_cross_entropy(x, y, reduction='none')
+    pairwise_cost = pairwise_cost.mean(-1)
+
+    indices = np.array(list(map(linear_sum_assignment, pairwise_cost.clone().detach().cpu().numpy())))
+    transposed_indices = np.transpose(indices, axes=(0, 2, 1))
+
+    transposed_indices = torch.tensor(transposed_indices).to(x.device)
+    pos_h = torch.tensor(transposed_indices)[:,:,0]
+    pos_w = torch.tensor(transposed_indices)[:,:,1]
+    batch_enumeration = torch.arange(x.shape[0])
+    
+    batch_enumeration = batch_enumeration.unsqueeze(1)
+    actual_costs = pairwise_cost[batch_enumeration, pos_h, pos_w]
+    
+    return actual_costs.sum(1).mean()
+
 
 # ============================================
-
+# dataloader init
 
 train_set = DataGenerator(root=exp_arguments['data_root'], 
                             mode='train', 
-                            class_info=True,
+                            max_objects = exp_arguments['num_slots'],
+                            properties=True,
+                            class_info=False,
                             resolution=resolution)
 train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
 val_set = DataGenerator(root=exp_arguments['data_root'], 
-                            mode='val', 
-                            class_info=True,
+                            mode='val',  
+                            max_objects = exp_arguments['num_slots'],
+                            properties=True,
+                            class_info=False,
                             resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
 test_set = DataGenerator(root=exp_arguments['data_root'], 
-                            mode='test', 
-                            class_info=True,
+                            mode='test',  
+                            max_objects = exp_arguments['num_slots'],
+                            properties=True,
+                            class_info=False,
                             resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers, drop_last=True)
+
+
 
 train_epoch_size = min(50000, len(train_dataloader))
 val_epoch_size = min(10000, len(val_dataloader))
@@ -192,14 +216,15 @@ opt.log_interval = train_epoch_size // 5
 
 
 
-def training_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
+def training_step(AEmodel, Smodel, optimizer, epoch, opt):
     idxs = []
     total_loss = 0; reasoning_loss = 0; recon_loss = 0; property_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
-        labels = sample['target'].to(device)
+        labels = sample['properties'].to(device)
         MCsamples = 1
+
         # ================
         recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = AEmodel(image, 
                                                                                 MCsamples = MCsamples,
@@ -215,21 +240,19 @@ def training_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
         overlap_loss += overlap_loss_.item()
 
         # =================
-        logits = Rmodel(slots, cbidxs, 
+        logits = Smodel(slots, 
                             epoch=epoch, batch=ibatch)
-        rloss = F.cross_entropy(logits, labels)
+        rloss = hungarian_huber_loss(logits, labels)
         reasoning_loss += rloss.item()
         loss += rloss
+
         # =================
         total_loss += loss.item()
 
-        # AEoptimizer.zero_grad()
-        # loss.backward()
-        # AEoptimizer.step()
-
-        Roptimizer.zero_grad()
+        optimizer.zero_grad()
         loss.backward()
-        Roptimizer.step()
+        optimizer.step()
+
 
         # ==================
         idxs.append(cbidxs)
@@ -244,8 +267,7 @@ def training_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
                 if opt.quantize: writer.add_scalar('TRAIN/cbp', perplexity.item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/cbd', get_cb_variance(AEmodel.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
-                writer.add_scalar('TRAIN/Rlr', Roptimizer.param_groups[0]['lr'], global_step)
-                # writer.add_scalar('TRAIN/AElr', AEoptimizer.param_groups[0]['lr'], global_step)
+                writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
         
 
     with torch.no_grad():
@@ -268,13 +290,13 @@ def training_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
 
 
 @torch.no_grad()
-def validation_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
+def validation_step(AEmodel, Smodel, optimizer, epoch, opt):
     idxs = []
     total_loss = 0; reasoning_loss = 0; recon_loss = 0; property_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
-        labels = sample['target'].to(device)
+        labels = sample['properties'].to(device)
         MCsamples = 1
 
          # ================
@@ -287,20 +309,19 @@ def validation_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
         overlap_loss_ = dice_loss(masks)
         loss = recon_loss_ + qloss + opt.overlap_weightage*overlap_loss_
 
-        
         recon_loss += recon_loss_.item()
         quant_loss += qloss.item()
         overlap_loss += overlap_loss_.item()
 
         # =================
-        logits = Rmodel(slots, cbidxs, 
+        logits = Smodel(slots, 
                             epoch=epoch, batch=ibatch)
-        rloss = F.cross_entropy(logits, labels)
+        rloss = hungarian_huber_loss(logits, labels)
         reasoning_loss += rloss.item()
         loss += rloss
         # =================
-
         total_loss += loss.item()
+
         idxs.append(cbidxs)
 
         if ibatch % opt.log_interval == 0:            
@@ -312,8 +333,7 @@ def validation_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
             if opt.quantize: writer.add_scalar('VALID/cbp', perplexity.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/cbd', get_cb_variance(AEmodel.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
-            writer.add_scalar('VALID/Rlr', Roptimizer.param_groups[0]['lr'], global_step)
-            # writer.add_scalar('VALID/AElr', AEoptimizer.param_groups[0]['lr'], global_step)
+            writer.add_scalar('VALID/lr', optimizer.param_groups[0]['lr'], global_step)
 
 
     attns = recons * masks + (1 - masks)
@@ -343,8 +363,8 @@ patience = 15
 
 
 for epoch in range(opt.num_epochs):
-    AEmodel.train(); Rmodel.train()
-    training_stats = training_step(AEmodel, Rmodel, Roptimizer, epoch, opt)
+    AEmodel.train(); Smodel.train()
+    training_stats = training_step(AEmodel, Smodel, optimizer, epoch, opt)
     print ("TrainingLogs Setprediction Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
                                                         exp_arguments['exp_name'],
                                                         epoch, 
@@ -352,8 +372,8 @@ for epoch in range(opt.num_epochs):
                                                         ))
 
 
-    AEmodel.eval(); Rmodel.eval()
-    validation_stats = validation_step(AEmodel, Rmodel, Roptimizer, epoch, opt)
+    AEmodel.eval(); Smodel.eval()
+    validation_stats = validation_step(AEmodel, Smodel, optimizer, epoch, opt)
     print ("ValidationLogs Setprediction Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
                                                         exp_arguments['exp_name'],
                                                         epoch, 
@@ -369,19 +389,17 @@ for epoch in range(opt.num_epochs):
         learning_rate = exp_arguments['learning_rate']
    
     learning_rate = learning_rate * (exp_arguments['decay_rate'] ** (epoch * train_epoch_size / exp_arguments['decay_steps']))
-    # AEoptimizer.param_groups[0]['lr'] = finetune_factor*learning_rate
-    Roptimizer.param_groups[0]['lr'] = learning_rate
+    optimizer.param_groups[0]['lr'] = learning_rate
 
 
     if epoch*train_epoch_size > exp_arguments['warmup_steps']:
-        # AElrscheduler.step(validation_stats['recon_loss'])
-        Rlrscheduler.step(validation_stats['reasoning_loss'])
+        lrscheduler.step(validation_stats['reasoning_loss'])
 
         if min_rloss > validation_stats['reasoning_loss']:
             min_rloss = validation_stats['reasoning_loss']
             torch.save({
                 'AEmodel_state_dict': AEmodel.state_dict(),
-                'Rmodel_state_dict': Rmodel.state_dict(),
+                'Rmodel_state_dict': Smodel.state_dict(),
                 'epoch': epoch,
                 'vstats': validation_stats,
                 'tstats': training_stats, 
@@ -391,7 +409,7 @@ for epoch in range(opt.num_epochs):
             if counter > patience:
                 ckpt = torch.load(os.path.join(opt.model_dir, f'reasoning_best.pth'))
                 AEmodel.load_state_dict(ckpt['AEmodel_state_dict'])
-                Rmodel.load_state_dict(ckpt['Rmodel_state_dict'])
+                Smodel.load_state_dict(ckpt['Rmodel_state_dict'])
             
             if counter > 5*patience:
                 print('Early Stopping: --------------')
@@ -399,7 +417,7 @@ for epoch in range(opt.num_epochs):
 
     torch.save({
         'AEmodel_state_dict': AEmodel.state_dict(),
-        'Rmodel_state_dict': Rmodel.state_dict(),
+        'Rmodel_state_dict': Smodel.state_dict(),
         'epoch': epoch,
         'vstats': validation_stats,
         'tstats': training_stats, 
@@ -414,7 +432,7 @@ for epoch in range(opt.num_epochs):
     with torch.no_grad():
         every_nepoch = 10
         if not epoch  % every_nepoch:
-            AEmodel.eval(); Rmodel.eval()
+            AEmodel.eval(); Smodel.eval()
 
             fid = calculate_fid(test_dataloader, AEmodel, opt.batch_size, 25, opt.model_dir)
             print(f'FID Score: {fid}')
@@ -427,24 +445,27 @@ for epoch in range(opt.num_epochs):
                 if batch_num > 50: break
 
                 image = samples['image'].to(AEmodel.device)
-                targets = samples['target'].to(AEmodel.device)
+                targets = samples['properties'].to(AEmodel.device)
 
                 recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = AEmodel(image)
-                logits = Rmodel(slots, cbidxs)
+                logits = Smodel(slots, cbidxs)
 
                 attributes.append(targets)
-                pred.append(torch.argmax(logits, -1))
+                pred.append(logits)
 
             attributes = torch.cat(attributes, 0).cpu().numpy()
             pred = torch.cat(pred, 0).cpu().numpy()
 
             print (attributes.shape, pred.shape)
             # For evaluating the AP score, we get a batch from the validation dataset.
-           
-            acc = accuracy_score(attributes, pred)
-            f1  = f1_score(attributes, pred, average='macro')
+            ap = [
+                average_precision_clevr(pred, attributes, d)
+                for d in [-1., 1., 0.5, 0.25, 0.125]
+            ]
+            print("AP@inf: {}, AP@1: {}, AP@0.5: {}, AP@0.25: {}, AP@0.125: {}".format(*ap))
 
-            print("Acc.: {}, F1: {}".format(acc, f1))
-
-            writer.add_scalar('VALID/Acc', acc, epoch//every_nepoch)
-            writer.add_scalar('VALID/F1', f1, epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@inf', ap[0], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@1', ap[1], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@0.5', ap[2], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@0.25', ap[3], epoch//every_nepoch)
+            writer.add_scalar('VALID/AP@0.125', ap[4], epoch//every_nepoch)

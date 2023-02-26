@@ -623,6 +623,21 @@ class SlotAttentionAutoEncoder(nn.Module):
 
 
 
+class SetPredictor(nn.Module):
+    def __init__(self,
+                    hid_dim,
+                    nproperties):
+        super().__init__()
+
+        self.nproperties = nproperties
+        self.mlp_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(hid_dim, self.nproperties),
+                                        nn.Sigmoid())        
+
+    def forward(self, x, epoch=0, batch=0):
+        return self.mlp_classifier(x)
+
 
 
 class SlotAttentionClassifier(nn.Module):
@@ -691,10 +706,7 @@ class SlotAttentionClassifier(nn.Module):
                                 kld_scale=kld_scale)
 
 
-    self.mlp_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
-                                        nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, self.nproperties),
-                                        nn.Sigmoid())
+    self.mlp_classifier = SetPredictor(hid_dim, self.nproperties)
     
     
 

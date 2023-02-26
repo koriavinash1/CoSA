@@ -83,7 +83,7 @@ parser.add_argument('--decay_steps', default=100000, type=int, help='Number of s
 
 opt = parser.parse_args()
 opt.model_dir = os.path.join(opt.model_dir, 'ObjectDiscovery', opt.exp_name)
-seed_everything(exp_arguments['seed'])
+seed_everything(opt.seed)
 
 # dataset path setting =====================================
 
