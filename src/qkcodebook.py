@@ -24,8 +24,7 @@ class QKCodebook(nn.Module):
         self.fc2_b = nn.Parameter(uniform_init(codebook_size, dim))
 
 
-    def sample_slots(self, quantized, encodings, shape, MCsamples=1):
-        # quantized: quantized feature encodings MB*Ntokens x dim
+    def sample_slots(self, encodings, shape, MCsamples=1):
         # encodings: encoded index MB*Ntokens x 1
         # shape: MB x Ntokens x dim
 

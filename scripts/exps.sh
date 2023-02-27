@@ -18,16 +18,20 @@ TASKTYPE='OD'
 # ./slurm-wrapper.sh $TASKTYPE objects_room default False False False False False False test 5
 # ./slurm-wrapper.sh $TASKTYPE tetrominoes default False False False False False False test 5
 # ./slurm-wrapper.sh $TASKTYPE ffhq default False False False False False False test 5
+# ./slurm-wrapper.sh $TASKTYPE floatingMNIST n2 False False False False False False test 5
+# ./slurm-wrapper.sh $TASKTYPE floatingMNIST n3 False False False False False False test 5
 
 
 
 # Euclidian codebook
-./slurm-wrapper.sh $TASKTYPE clevr hans3 True False False True False True Euclidian 5
-./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian 5
-./slurm-wrapper.sh $TASKTYPE bitmoji default True False False True False True Euclidian 5
+# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False False True False True Euclidian 5
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian 5
+# ./slurm-wrapper.sh $TASKTYPE bitmoji default True False False True False True Euclidian 5
 # ./slurm-wrapper.sh $TASKTYPE objects_room default True False False True False True Euclidian 5
 # ./slurm-wrapper.sh $TASKTYPE tetrominoes default True False False True False True Euclidian 5
 # ./slurm-wrapper.sh $TASKTYPE ffhq default True False False True False True Euclidian 5
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n2 True False False True False True Euclidian 5
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n3 True False False True False True Euclidian 5
 
 
 
@@ -39,16 +43,20 @@ TASKTYPE='OD'
 # ./slurm-wrapper.sh $TASKTYPE objects_room default True True False True False True Cosine 5
 # ./slurm-wrapper.sh $TASKTYPE tetrominoes default True True False True False True Cosine 5
 # ./slurm-wrapper.sh $TASKTYPE ffhq default True True False True False True Cosine 5
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n2 True True False True False True Cosine 5
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n3 True True False True False True Cosine 5
 
 
 
 # Gumble codebook
 # ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False True True False True Gumble 5
-./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble 5
-./slurm-wrapper.sh $TASKTYPE bitmoji default True False True True False True Gumble 5
-./slurm-wrapper.sh $TASKTYPE objects_room default True False True True False True Gumble 5
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble 5
+# ./slurm-wrapper.sh $TASKTYPE bitmoji default True False True True False True Gumble 5
+# ./slurm-wrapper.sh $TASKTYPE objects_room default True False True True False True Gumble 5
 # ./slurm-wrapper.sh $TASKTYPE tetrominoes default True False True True False True Gumble 5
-./slurm-wrapper.sh $TASKTYPE ffhq default True False True True False True Gumble 5
+# ./slurm-wrapper.sh $TASKTYPE ffhq default True False True True False True Gumble 5
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n2 True False True True False True Gumble 5
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n3 True False True True False True Gumble 5
 
 
 # =========================================================================

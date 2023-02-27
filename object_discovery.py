@@ -116,6 +116,23 @@ elif opt.dataset_name == 'clevr':
         opt.data_root = '/vol/biomedic3/agk21/datasets/multi-objects/RawData-subset/clevr_with_masks'
 
 
+elif opt.dataset_name == 'floatingMNIST':
+    opt.encoder_res = 8
+    opt.decoder_res = 8
+    opt.img_size = 64
+    opt.max_slots = 11
+    opt.kernel_size = 5
+    opt.nunique_objects = 11
+
+
+    if opt.variant == 'n3':
+        opt.num_slots = 4
+        opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST3'
+    else:
+        opt.num_slots = 3
+        opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST2'
+
+
 elif opt.dataset_name == 'multi_dsprites':
     opt.encoder_res = 4
     opt.decoder_res = 4

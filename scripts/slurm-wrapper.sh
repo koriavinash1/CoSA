@@ -6,8 +6,7 @@ sbatch <<EOT
 #SBATCH -p gpus                    # Partition (queue) 
 #SBATCH --gres gpu:1               # gpu:n, where n = number of GPUs 
 #SBATCH --mem 32G                  # memory pool for all cores 
-#SBATCH --job-name='$1$2$3${10}'
-#SBATCH --exclude=lory
+#SBATCH --job-name='$1$2$3${10}'   # SBATCH --exclude=lory 'to exclude particular node'
 #SBATCH --output=slurm.%N.%j.log   # Standard output and error loga
 
 

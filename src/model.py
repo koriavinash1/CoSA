@@ -359,7 +359,7 @@ class SlotAttention(nn.Module):
 
     def forward(self, inputs, 
                     num_slots = None,
-                    MCsamples = 10, 
+                    MCsamples = 1, 
                     epoch=0, batch= 0, 
                     train = True, 
                     images=None):
@@ -408,6 +408,42 @@ class SlotAttention(nn.Module):
             
         return slots, cbidxs, qloss, perplexity, self.decoder_transformation(slots)
 
+
+
+    @torch.no_grad()
+    def given_idxs(self, inputs, 
+                        slot_idxs,
+                        MCsamples = 1,
+                        images=None):
+        b, d, w, h = inputs.shape
+        n_s = slot_idxs.shape[1]
+
+        # Compute Projections ========================
+        inputs_features = self.encoder_transformation(inputs, position = True)
+        inputs_features = self.norm_input(inputs_features)
+
+        # sample slots ==============================
+        qloss = torch.Tensor([0]).to(inputs.device)
+        perplexity = torch.Tensor([[0]]).to(inputs.device)
+
+        shape = slot_idxs.shape
+        encodings = torch.zeros(np.prod(shape), self.max_slots, device=inputs.device)
+        encodings.scatter_(1, slot_idxs.reshape(-1, 1), 1)
+
+        slots = self.slot_quantizer.qkclass.sample_slots(encodings, (b, n_s, self.dim))
+        slots = slots.view(b, MCsamples, n_s, -1)
+
+        # # Key-Value projection vectors ====================
+        # k = self.to_k(inputs_features)
+        # v = self.to_v(inputs_features)
+
+        # # Slot attention =========================
+        # for _ in range(self.iters):
+        #     slots = self.step(slots, k, v, MCsamples, n_s, b)
+
+        # if self.implicit: slots = self.step(slots.detach(), k, v)
+
+        return slots, slot_idxs, qloss, perplexity, self.decoder_transformation(slots)
 
 
 
@@ -577,7 +613,7 @@ class SlotAttentionAutoEncoder(nn.Module):
 
     def forward(self, image, 
                     num_slots=None, 
-                    MCsamples = 5,
+                    MCsamples = 1,
                     epoch=0, batch=0):
 
         n_s = num_slots if num_slots is not None else self.num_slots   
@@ -596,6 +632,52 @@ class SlotAttentionAutoEncoder(nn.Module):
                                                                         epoch = epoch, 
                                                                         batch = batch, 
                                                                         images=image)
+        # `slots` has shape: [batch_size, MCsamples, num_slots, slot_size].
+        # `features` has shape: [batch_size*MCsamples*num_slots, width_init, height_init, slot_size]
+
+        x = self.decoder_cnn(features)
+        x = x.permute(0, 2, 3, 1)
+        # `x` has shape: [batch_size*MCsamples*num_slots, width, height, num_channels+1].
+
+        # Undo combination of slot and batch dimension; split alpha masks.
+        recons, masks = x.reshape(image.shape[0], MCsamples, n_s, x.shape[1], x.shape[2], x.shape[3]).split([3,1], dim=-1)
+        # `recons` has shape: [batch_size, MCsamples, num_slots, width, height, num_channels].
+        # `masks` has shape: [batch_size, MCsamples, num_slots, width, height, 1].
+
+        # Normalize alpha masks over slots.
+        masks = nn.Softmax(dim=2)(masks)
+        recon_combined = torch.sum(recons * masks, dim=2)  # Recombine image.
+
+        # Average over MC samples.....
+        recon_combined = recon_combined.mean(1); slots = slots.mean(1); 
+        recons = recons.mean(1); masks = masks.mean(1)
+
+        recon_combined = recon_combined.permute(0, 3, 1, 2)
+        # `recon_combined` has shape: [batch_size, width, height, num_channels].
+
+        return recon_combined, recons, masks, slots, cbidxs, qloss, perplexity
+
+
+    def given_idxs(self, image, slot_idxs=None, 
+                                    MCsamples = 1):
+        if slot_idxs is None:
+            return self.forward(image)
+        
+
+        n_s = slot_idxs.shape[1]  
+        MCsamples = MCsamples if self.quantize else 1  
+
+        # `image` has shape: [batch_size, num_channels, width, height].
+
+        # Convolutional encoder with position embedding.
+        x = self.encoder_cnn(image)  # CNN Backbone.
+        # `x` has shape: [batch_size, input_size, width, height].
+
+        # Slot Attention module.
+        slots, cbidxs, qloss, perplexity, features = self.slot_attention.given_idxs(x, 
+                                                                                slot_idxs,
+                                                                                MCsamples = MCsamples,
+                                                                                images=image)
         # `slots` has shape: [batch_size, MCsamples, num_slots, slot_size].
         # `features` has shape: [batch_size*MCsamples*num_slots, width_init, height_init, slot_size]
 

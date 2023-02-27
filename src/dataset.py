@@ -61,6 +61,7 @@ class DataGenerator(Dataset):
                         max_objects=10,
                         properties=False,
                         class_info=False,
+                        reasoning_type='default',
                         resolution=(128, 128)):
         super(DataGenerator, self).__init__()
         
@@ -70,6 +71,7 @@ class DataGenerator(Dataset):
         self.resolution = resolution
         self.properties = properties
         self.class_info = class_info
+        self.reasoning_type = reasoning_type
 
         if self.properties:
             self.files, self.properties_info = get_paths_with_properties_CLEVR(root, mode, max_objects)
@@ -103,7 +105,24 @@ class DataGenerator(Dataset):
             sample['properties'] = property_info
 
         if self.class_info:
-            target = int(path.split('/')[-1].split('_')[3])
+            if path.lower.__contains__('hans'):
+                target = int(path.split('/')[-1].split('_')[3])
+            elif path.lower.__contains__('mnist'):
+                digits = []
+                for d in path.split('/')[-1].split('_'):
+                    if d == 'MNIST': break
+                    digits.append(int(d))
+
+                if self.reasoning_type == 'sum':
+                    target = np.sum(digits)
+                elif self.reasoning_type == 'diff':
+                    target = np.abs(np.diff(digits))
+                elif self.reasoning_type == 'mixed':
+                    target = 0
+                    for digit in digits:
+                        if digit > 5: target -= digit
+                        else: target += digit
+
             sample['target'] = target   
 
         return sample

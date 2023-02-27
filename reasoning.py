@@ -28,7 +28,7 @@ def str2bool(v):
 
 
 parser.add_argument('--batch_size', default=32, type=int)
-parser.add_argument('--learning_rate', default=0.001, type=float)
+parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--nproperties', default=19, type=int)
 parser.add_argument('--nclasses', default=3, type=int)
 parser.add_argument('--config', type=str)

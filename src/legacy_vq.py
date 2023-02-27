@@ -157,8 +157,7 @@ class BaseVectorQuantizer(nn.Module):
         slots = None
         # slot sampling
         if self.qk:
-            slots = self.qkclass.sample_slots(quantized, 
-                                                encodings, 
+            slots = self.qkclass.sample_slots(encodings, 
                                                 input_shape,
                                                 MCsamples=MCsamples)
 
@@ -208,8 +207,7 @@ class BaseVectorQuantizer(nn.Module):
         slots = None
         # slot sampling
         if self.qk:
-            slots = self.qkclass.sample_slots(quantized, 
-                                                    encodings, 
+            slots = self.qkclass.sample_slots(encodings, 
                                                     input_shape,
                                                     MCsamples=MCsamples)
 
