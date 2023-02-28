@@ -105,9 +105,9 @@ class DataGenerator(Dataset):
             sample['properties'] = property_info
 
         if self.class_info:
-            if path.lower.__contains__('hans'):
+            if path.lower().__contains__('hans'):
                 target = int(path.split('/')[-1].split('_')[3])
-            elif path.lower.__contains__('mnist'):
+            elif path.lower().__contains__('mnist'):
                 digits = []
                 for d in path.split('/')[-1].split('_'):
                     if d == 'MNIST': break

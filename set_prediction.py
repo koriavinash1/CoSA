@@ -11,6 +11,7 @@ from torch.nn.utils import clip_grad_norm_
 
 import torch.optim as optim
 import torch
+import torch.nn.functional as F
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 from scipy.optimize import linear_sum_assignment
@@ -60,7 +61,7 @@ parser.add_argument('--kld_scale', type=float, default=1.0, help='kl distance we
 
 # training parameters
 parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
-parser.add_argument('--learning_rate', default=0.0004, type=float, help='training learning rate')
+parser.add_argument('--learning_rate', default=0.001, type=float, help='training learning rate')
 parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 parser.add_argument('--implicit', type=str2bool, default=False, help="use implicit neumann's approximation for computing fixed point")
@@ -81,9 +82,9 @@ seed_everything(opt.seed)
 
 # set information based on dataset and it variant
 if opt.dataset_name == 'clevr':
-    opt.encoder_res = 8
-    opt.decoder_res = 8
-    opt.img_size = 64
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 128
     opt.max_slots = 19
     opt.kernel_size = 5
     opt.num_slots = 7

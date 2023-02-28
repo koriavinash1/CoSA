@@ -1,7 +1,7 @@
 import os
 import argparse
 from src.dataset import *
-from src.model import SlotAttentionReasoning, SlotAttentionAutoEncoder
+from src.model import SlotAttentionReasoning
 from src.metrics import average_precision_clevr, accuracy, dice_loss, calculate_fid
 from src.utils import seed_everything, get_cb_variance, create_histogram, linear_warmup, visualize
 
@@ -27,50 +27,105 @@ def str2bool(v):
     return v.lower() in ('true', '1')
 
 
-parser.add_argument('--batch_size', default=32, type=int)
-parser.add_argument('--learning_rate', default=0.01, type=float)
-parser.add_argument('--nproperties', default=19, type=int)
-parser.add_argument('--nclasses', default=3, type=int)
-parser.add_argument('--config', type=str)
-parser.add_argument('--reasoning_type', default='default', type=str)
+# exp setup information
+parser.add_argument('--model_dir', default='Logs', type=str, help='where to save models' )
+parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
+parser.add_argument('--seed', default=0, type=int, help='random seed')
 
+# dataset information
+parser.add_argument('--dataset_name', default='clevr', type=str, help='where to save models' )
+parser.add_argument('--variant', default='hans3', type=str, help='where to save models' )
+parser.add_argument('--img_size', default=128, type=int, help='image size')
+parser.add_argument('--nproperties', default=19, type=int, help='total number properties in clevr dataset')
+parser.add_argument('--nclasses', default=3, type=int, help='total number classes clevr dataset')
 
-parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
+# model information
+parser.add_argument('--kernel_size', default=5, type=int, help='convolutional kernel size')
+parser.add_argument('--encoder_res', default=8, type=int, help='encoder latent size')
+parser.add_argument('--decoder_res', default=8, type=int, help='decoder init size')
+
+# SA parameters
+parser.add_argument('--num_slots', default=10, type=int, help='Number of slots in Slot Attention.')
+parser.add_argument('--num_iterations', default=3, type=int, help='Number of attention iterations.')
+parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension size')
+
+# BSA parameters
+parser.add_argument('--max_slots', default=64, type=int, help='Maximum number of plausible slots in dataset.')
+parser.add_argument('--quantize', default=False, type=str2bool, help='perform slot quantization')
+parser.add_argument('--cosine', default=False, type=str2bool, help='use geodesic distance')
+parser.add_argument('--cb_decay', type=float, default=0.999, help='EMA decay for codebook')
+parser.add_argument('--cb_qk', type=str2bool, default=False, help='use slot dictionary structure')
+parser.add_argument('--eigen_quantizer', type=str2bool, default=False, help='quantize principle components')
+parser.add_argument('--restart_cbstats', type=str2bool, default=False, help='random restart codebook stats to prevent codebook collapse')
+parser.add_argument('--gumble', type=str2bool, default=False, help='use gumple softmax trick for continious sampling')
+parser.add_argument('--temperature', type=float, default=2.0, help='sampling temperature')
+parser.add_argument('--kld_scale', type=float, default=1.0, help='kl distance weightage')
+
+# training parameters
+parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
+parser.add_argument('--learning_rate', default=0.001, type=float, help='training learning rate')
 parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
+parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
+parser.add_argument('--implicit', type=str2bool, default=False, help="use implicit neumann's approximation for computing fixed point")
+
+# unused parameters
+parser.add_argument('--warmup_steps', default=10000, type=int, help='Number of warmup steps for the learning rate.')
+parser.add_argument('--decay_rate', default=0.5, type=float, help='Rate for the learning rate decay.')
+parser.add_argument('--decay_steps', default=100000, type=int, help='Number of steps for the learning rate decay.')
+
 
 opt = parser.parse_args()
+opt.model_dir = os.path.join(opt.model_dir, 'Reasoning', opt.exp_name)
 
 
-# load parameters....
-exp_arguments = json.load(open(opt.config, 'r'))
-print(exp_arguments)
-print ('='*25)
-
-opt.overlap_weightage = exp_arguments['overlap_weightage']
-opt.quantize = exp_arguments['quantize']
-opt.batch_size = exp_arguments['batch_size']
-opt.max_slots = exp_arguments['max_slots']
-opt.num_slots = exp_arguments['num_slots']
-seed_everything(exp_arguments['seed'])
+seed_everything(opt.seed)
 
 # dataset path setting =====================================
 
 # set information based on dataset and it variant
-if exp_arguments['dataset_name'] == 'clevr':
+if opt.dataset_name == 'clevr':
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 128
+    opt.max_slots = 19
+    opt.kernel_size = 5
+    opt.num_slots = 7
+    opt.nunique_objects = 16
     opt.nproperties = 19
 
-    if exp_arguments['variant'] == 'hans3':
+    if opt.variant == 'hans3':
         opt.nclasses = 3
-    elif exp_arguments['variant'] == 'hans7':
+        opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3'
+    elif opt.variant == 'hans7':
         opt.nclasses = 7
+        opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans7'
 
-elif exp_arguments['dataset_name'] == 'ffhq':
+elif opt.dataset_name == 'ffhq':
+    opt.variant ='default'
+    opt.encoder_res = 8
+    opt.decoder_res = 8
+    opt.img_size = 64
+    opt.max_slots = 64
+    opt.num_slots = 7
+    opt.nunique_objects = 15
+    opt.kernel_size = 5
     opt.nproperties = 21
     opt.nclasses = 2
+    opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/FFHQ/data'
 
-elif exp_arguments['dataset_name'] == 'floatingMNIST':
-    opt.nproperties = 10
-    if exp_arguments['variant'] == 'n2':
+
+elif opt.dataset_name == 'floatingMNIST':
+    opt.encoder_res = 8
+    opt.decoder_res = 8
+    opt.img_size = 64
+    opt.kernel_size = 3
+    opt.max_slots = 11
+    opt.nproperties = 11
+
+    if opt.variant == 'n2':
+        opt.num_slots = 3
+        opt.nunique_objects = 3
+        opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST2'
         if opt.reasoning_type == 'diff':
             opt.nclasses = 10
         elif opt.reasoning_type == 'mixed':
@@ -78,7 +133,10 @@ elif exp_arguments['dataset_name'] == 'floatingMNIST':
         else:
             opt.nclasses = 19
 
-    elif exp_arguments['variant'] == 'n3':
+    elif opt.variant == 'n3':
+        opt.num_slots = 4
+        opt.nunique_objects = 4
+        opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST3'
         if opt.reasoning_type == 'diff':
             opt.nclasses = 28
         elif opt.reasoning_type == 'mixed':
@@ -92,13 +150,10 @@ else:
 # =========================================================
 # Dump exp config into json and tensorboard logs....
 
-
-resolution = (exp_arguments['img_size'], exp_arguments['img_size'])
-opt.model_dir = exp_arguments['model_dir'].replace('ObjectDiscovery', 'Reasoning')
-
-
+resolution = (opt.img_size, opt.img_size)
 arg_str_list = ['{}={}'.format(k, v) for k, v in vars(opt).items()]
 arg_str = '__'.join(arg_str_list)
+
 
 os.makedirs(opt.model_dir, exist_ok=True)
  # save all parameters in the exp directory
@@ -107,79 +162,76 @@ json.dump(vars(opt),
         indent=4)
 print ('Parameters saved in: ', os.path.join(opt.model_dir, 'exp-parameters.json'))
 
-
 log_dir = os.path.join(opt.model_dir, datetime.today().isoformat())
+
 
 os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir)
 writer.add_text('hparams', arg_str)
 
-# ===========================================
+# ======================================================
 # model init
-AEmodel = SlotAttentionAutoEncoder(resolution, 
-                                    exp_arguments['num_slots'], 
-                                    exp_arguments['num_iterations'], 
-                                    exp_arguments['hid_dim'],
-                                    exp_arguments['max_slots'],
-                                    exp_arguments['nunique_objects'],
-                                    exp_arguments['quantize'],
-                                    exp_arguments['cosine'],
-                                    exp_arguments['cb_decay'],
-                                    exp_arguments['encoder_res'],
-                                    exp_arguments['decoder_res'],
-                                    exp_arguments['kernel_size'],
-                                    exp_arguments['cb_qk'],
-                                    exp_arguments['eigen_quantizer'],
-                                    exp_arguments['restart_cbstats'],
-                                    exp_arguments['implicit'],
-                                    exp_arguments['gumble'],
-                                    exp_arguments['temperature'],
-                                    exp_arguments['kld_scale']).to(device)
 
-
-ckpt=torch.load(os.path.join(exp_arguments['model_dir'], 'discovery_best.pth' ))
-AEmodel.load_state_dict(ckpt['model_state_dict'])
-AEmodel.device = device
-
-
-Rmodel = SlotAttentionReasoning(slot_dim=exp_arguments['hid_dim'],
-                                    max_slots=exp_arguments['max_slots'],
-                                    nproperties=opt.nproperties,
-                                    nclasses=opt.nclasses).to(device)
+model = SlotAttentionReasoning(resolution = resolution, 
+                                    num_slots =  opt.num_slots, 
+                                    num_iterations =  opt.num_iterations, 
+                                    hid_dim =  opt.hid_dim,
+                                    nproperties = opt.nproperties,
+                                    nclasses = opt.nclasses,
+                                    max_slots =  opt.max_slots,
+                                    nunique_slots =  opt.nunique_objects,
+                                    quantize = opt.quantize,
+                                    cosine = opt.cosine,
+                                    cb_decay = opt.cb_decay,
+                                    encoder_res =  opt.encoder_res,
+                                    decoder_res = opt.decoder_res,
+                                    kernel_size = opt.kernel_size,
+                                    cb_qk = opt.cb_qk,
+                                    eigen_quantizer =  opt.eigen_quantizer,
+                                    restart_cbstats =  opt.restart_cbstats,
+                                    implicit = opt.implicit,
+                                    gumble = opt.gumble,
+                                    temperature = opt.temperature,
+                                    kld_scale = opt.kld_scale,
+                                    deeper=True).to(device)
+model.device = device
 
 
 # ===========================================
 # Optimizer setup
-finetune_factor = 0.01
-# AEoptimizer = optim.Adam(AEmodel.parameters(), lr=finetune_factor*opt.learning_rate)
-Roptimizer = optim.Adam(list(AEmodel.parameters()) + list(Rmodel.parameters()), lr=opt.learning_rate)
-
-Rlrscheduler = ReduceLROnPlateau(Roptimizer, 'min')
-# AElrscheduler = ReduceLROnPlateau(AEoptimizer, 'min')
+optimizer = optim.Adam(list(model.parameters()), lr=opt.learning_rate)
+lrscheduler = ReduceLROnPlateau(optimizer, 'min')
 
 # ============================================
+# dataloader
 
-
-train_set = DataGenerator(root=exp_arguments['data_root'], 
+train_set = DataGenerator(root=opt.data_root, 
                             mode='train', 
+                            max_objects = opt.num_slots,
+                            properties=False,
                             class_info=True,
                             resolution=resolution)
 train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
-val_set = DataGenerator(root=exp_arguments['data_root'], 
-                            mode='val', 
+val_set = DataGenerator(root=opt.data_root, 
+                            mode='val',  
+                            max_objects = opt.num_slots,
+                            properties=False,
                             class_info=True,
                             resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
-test_set = DataGenerator(root=exp_arguments['data_root'], 
-                            mode='test', 
+test_set = DataGenerator(root=opt.data_root, 
+                            mode='test',  
+                            max_objects = opt.num_slots,
+                            properties=False,
                             class_info=True,
                             resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers, drop_last=True)
+
 
 train_epoch_size = min(50000, len(train_dataloader))
 val_epoch_size = min(10000, len(val_dataloader))
@@ -192,44 +244,33 @@ opt.log_interval = train_epoch_size // 5
 
 
 
-def training_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
+def training_step(model, optimizer, epoch, opt):
     idxs = []
     total_loss = 0; reasoning_loss = 0; recon_loss = 0; property_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
         labels = sample['target'].to(device)
+
         MCsamples = 1
         # ================
-        recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = AEmodel(image, 
-                                                                                MCsamples = MCsamples,
-                                                                                epoch=epoch, 
-                                                                                batch=ibatch)
-        recon_loss_ = ((image - recon_combined)**2).mean()
+        predictions, cbidxs, qloss, perplexity = model(image, 
+                                                        MCsamples = MCsamples,
+                                                        epoch=epoch, 
+                                                        batch=ibatch)
         
-        overlap_loss_ = dice_loss(masks)
-        loss = recon_loss_ + qloss + opt.overlap_weightage*overlap_loss_
+        rloss = F.cross_entropy(predictions, labels)
+        loss = rloss + qloss
 
-        recon_loss += recon_loss_.item()
-        quant_loss += qloss.item()
-        overlap_loss += overlap_loss_.item()
-
-        # =================
-        logits = Rmodel(slots, cbidxs, 
-                            epoch=epoch, batch=ibatch)
-        rloss = F.cross_entropy(logits, labels)
         reasoning_loss += rloss.item()
-        loss += rloss
-        # =================
+        quant_loss += qloss.item()
         total_loss += loss.item()
 
-        # AEoptimizer.zero_grad()
-        # loss.backward()
-        # AEoptimizer.step()
+        # =================
 
-        Roptimizer.zero_grad()
+        optimizer.zero_grad()
         loss.backward()
-        Roptimizer.step()
+        optimizer.step()
 
         # ==================
         idxs.append(cbidxs)
@@ -237,38 +278,25 @@ def training_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
         with torch.no_grad():
             if ibatch % opt.log_interval == 0:            
                 writer.add_scalar('TRAIN/loss', loss.item(), global_step)
-                writer.add_scalar('TRAIN/mse', recon_loss_.item(), global_step)
-                writer.add_scalar('TRAIN/opi', overlap_loss_.item(), global_step)
                 writer.add_scalar('TRAIN/rloss', rloss.item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/cbp', perplexity.item(), global_step)
-                if opt.quantize: writer.add_scalar('TRAIN/cbd', get_cb_variance(AEmodel.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+                if opt.quantize: writer.add_scalar('TRAIN/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
-                writer.add_scalar('TRAIN/Rlr', Roptimizer.param_groups[0]['lr'], global_step)
-                # writer.add_scalar('TRAIN/AElr', AEoptimizer.param_groups[0]['lr'], global_step)
+                writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
         
-
-    with torch.no_grad():
-        attns = recons * masks + (1 - masks)
-        vis_recon = visualize(image, recon_combined, attns, cbidxs, opt.max_slots, N=32)
-        grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 3, pad_value=0.2)[:, 2:-2, 2:-2]
-        writer.add_image('TRAIN/recon_epoch={:03}'.format(epoch+1), grid)
-
-        del recons, masks, slots
 
     idxs = torch.cat(idxs, 0)
     return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
                         'reasoning_loss': reasoning_loss*1.0/train_epoch_size,
-                        'recon_loss': recon_loss*1.0/train_epoch_size,
                         'quant_loss': quant_loss*1.0/train_epoch_size,
-                        'overlap_loss': overlap_loss*1.0/train_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
 
     return return_stats
 
 
 @torch.no_grad()
-def validation_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
+def validation_step(model, optimizer, epoch, opt):
     idxs = []
     total_loss = 0; reasoning_loss = 0; recon_loss = 0; property_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
@@ -277,58 +305,37 @@ def validation_step(AEmodel, Rmodel, Roptimizer, epoch, opt):
         labels = sample['target'].to(device)
         MCsamples = 1
 
-         # ================
-        recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = AEmodel(image, 
-                                                                                MCsamples = MCsamples,
-                                                                                epoch=epoch, 
-                                                                                batch=ibatch)
-        recon_loss_ = ((image - recon_combined)**2).mean()
+        # ================
+        predictions, cbidxs, qloss, perplexity = model(image, 
+                                                        MCsamples = MCsamples,
+                                                        epoch=epoch, 
+                                                        batch=ibatch)
         
-        overlap_loss_ = dice_loss(masks)
-        loss = recon_loss_ + qloss + opt.overlap_weightage*overlap_loss_
+        rloss = F.cross_entropy(predictions, labels)
+        loss = rloss + qloss
 
-        
-        recon_loss += recon_loss_.item()
-        quant_loss += qloss.item()
-        overlap_loss += overlap_loss_.item()
 
-        # =================
-        logits = Rmodel(slots, cbidxs, 
-                            epoch=epoch, batch=ibatch)
-        rloss = F.cross_entropy(logits, labels)
         reasoning_loss += rloss.item()
-        loss += rloss
+        quant_loss += qloss.item()
+        total_loss += loss.item()
         # =================
 
-        total_loss += loss.item()
         idxs.append(cbidxs)
 
         if ibatch % opt.log_interval == 0:            
             writer.add_scalar('VALID/loss', loss.item(), global_step)
-            writer.add_scalar('VALID/mse', recon_loss_.item(), global_step)
-            writer.add_scalar('VALID/opi', overlap_loss_.item(), global_step)
             writer.add_scalar('VALID/rloss', rloss.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/quant', qloss.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/cbp', perplexity.item(), global_step)
-            if opt.quantize: writer.add_scalar('VALID/cbd', get_cb_variance(AEmodel.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+            if opt.quantize: writer.add_scalar('VALID/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
-            writer.add_scalar('VALID/Rlr', Roptimizer.param_groups[0]['lr'], global_step)
-            # writer.add_scalar('VALID/AElr', AEoptimizer.param_groups[0]['lr'], global_step)
+            writer.add_scalar('VALID/lr', optimizer.param_groups[0]['lr'], global_step)
 
-
-    attns = recons * masks + (1 - masks)
-    vis_recon = visualize(image, recon_combined, attns, cbidxs, opt.max_slots, N=32)
-    grid = vutils.make_grid(vis_recon, nrow=opt.num_slots + 3, pad_value=0.2)[:, 2:-2, 2:-2]
-    writer.add_image('VALID/recon_epoch={:03}'.format(epoch+1), grid)
-
-    del recons, masks, slots
 
     idxs = torch.cat(idxs, 0)
     return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
                         'reasoning_loss': reasoning_loss*1.0/train_epoch_size,
-                        'recon_loss': recon_loss*1.0/train_epoch_size,
                         'quant_loss': quant_loss*1.0/train_epoch_size,
-                        'overlap_loss': overlap_loss*1.0/train_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
     return return_stats
 
@@ -343,45 +350,43 @@ patience = 15
 
 
 for epoch in range(opt.num_epochs):
-    AEmodel.train(); Rmodel.train()
-    training_stats = training_step(AEmodel, Rmodel, Roptimizer, epoch, opt)
+    model.train()
+    training_stats = training_step(model, optimizer, epoch, opt)
     print ("TrainingLogs Setprediction Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
-                                                        exp_arguments['exp_name'],
+                                                        opt.exp_name,
                                                         epoch, 
                                                         training_stats
                                                         ))
 
 
-    AEmodel.eval(); Rmodel.eval()
-    validation_stats = validation_step(AEmodel, Rmodel, Roptimizer, epoch, opt)
+    model.eval()
+    validation_stats = validation_step(model, optimizer, epoch, opt)
     print ("ValidationLogs Setprediction Time Taken:{} --- EXP: {}, Epoch: {}, Stats: {}".format(timedelta(seconds=time.time() - start),
-                                                        exp_arguments['exp_name'],
+                                                        opt.exp_name,
                                                         epoch, 
                                                         validation_stats
                                                         ))
     print ('='*50)
 
 
-    # warm up learning rate setup
-    if epoch*train_epoch_size < exp_arguments['warmup_steps']: 
-        learning_rate = exp_arguments['learning_rate'] *(epoch * train_epoch_size / exp_arguments['warmup_steps'])
+     # warm up learning rate setup
+    if epoch*train_epoch_size < opt.warmup_steps: 
+        learning_rate = opt.learning_rate *(epoch * train_epoch_size / opt.warmup_steps)
     else:
-        learning_rate = exp_arguments['learning_rate']
+        learning_rate = opt.learning_rate
    
-    learning_rate = learning_rate * (exp_arguments['decay_rate'] ** (epoch * train_epoch_size / exp_arguments['decay_steps']))
-    # AEoptimizer.param_groups[0]['lr'] = finetune_factor*learning_rate
-    Roptimizer.param_groups[0]['lr'] = learning_rate
+    learning_rate = learning_rate * (opt.decay_rate ** (epoch * train_epoch_size / opt.decay_steps))
+    optimizer.param_groups[0]['lr'] = learning_rate
 
 
-    if epoch*train_epoch_size > exp_arguments['warmup_steps']:
-        # AElrscheduler.step(validation_stats['recon_loss'])
-        Rlrscheduler.step(validation_stats['reasoning_loss'])
+
+    if epoch*train_epoch_size > opt.warmup_steps:
+        lrscheduler.step(validation_stats['reasoning_loss'])
 
         if min_rloss > validation_stats['reasoning_loss']:
             min_rloss = validation_stats['reasoning_loss']
             torch.save({
-                'AEmodel_state_dict': AEmodel.state_dict(),
-                'Rmodel_state_dict': Rmodel.state_dict(),
+                'model_state_dict': model.state_dict(),
                 'epoch': epoch,
                 'vstats': validation_stats,
                 'tstats': training_stats, 
@@ -390,23 +395,18 @@ for epoch in range(opt.num_epochs):
             counter +=1 
             if counter > patience:
                 ckpt = torch.load(os.path.join(opt.model_dir, f'reasoning_best.pth'))
-                AEmodel.load_state_dict(ckpt['AEmodel_state_dict'])
-                Rmodel.load_state_dict(ckpt['Rmodel_state_dict'])
+                model.load_state_dict(ckpt['model_state_dict'])
             
             if counter > 5*patience:
                 print('Early Stopping: --------------')
                 break
 
     torch.save({
-        'AEmodel_state_dict': AEmodel.state_dict(),
-        'Rmodel_state_dict': Rmodel.state_dict(),
+        'model_state_dict': model.state_dict(),
         'epoch': epoch,
         'vstats': validation_stats,
         'tstats': training_stats, 
         }, os.path.join(opt.model_dir, f'reasoning_last.pth'))
-
-    if epoch > 5:
-        opt.overlap_weightage *= (1 + 10*epoch/opt.num_epochs)
 
 
 
@@ -414,23 +414,16 @@ for epoch in range(opt.num_epochs):
     with torch.no_grad():
         every_nepoch = 10
         if not epoch  % every_nepoch:
-            AEmodel.eval(); Rmodel.eval()
-
-            fid = calculate_fid(test_dataloader, AEmodel, opt.batch_size, 25, opt.model_dir)
-            print(f'FID Score: {fid}')
-
-            writer.add_scalar('VALID/FID', fid, epoch//every_nepoch)
-
+            model.eval()
 
             pred = []; attributes = []
             for batch_num, samples in tqdm(enumerate(test_dataloader), desc='calculating Acc-F1 '):
                 if batch_num > 50: break
 
-                image = samples['image'].to(AEmodel.device)
-                targets = samples['target'].to(AEmodel.device)
+                image = samples['image'].to(model.device)
+                targets = samples['target'].to(model.device)
 
-                recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = AEmodel(image)
-                logits = Rmodel(slots, cbidxs)
+                logits, cbidxs, qloss, perplexity = model(image, MCsamples=1)
 
                 attributes.append(targets)
                 pred.append(torch.argmax(logits, -1))

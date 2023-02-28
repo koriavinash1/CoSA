@@ -62,9 +62,9 @@ seed_everything(opt.seed)
 
 # set information based on dataset and it variant
 if opt.dataset_name == 'clevr':
-    opt.encoder_res = 8
-    opt.decoder_res = 8
-    opt.img_size = 64
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 128
     opt.max_slots = 19
     opt.kernel_size = 5
     opt.num_slots = 7

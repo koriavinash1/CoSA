@@ -9,6 +9,7 @@ from src.hpenalty import hessian_penalty
 from src.utils import compute_eigen, uniform_init
 from geomstats.geometry.hypersphere import Hypersphere
 from einops import rearrange, repeat
+from torchvision import models
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -570,7 +571,8 @@ class SlotAttentionAutoEncoder(nn.Module):
                         implicit=False,
                         gumble=False,
                         temperature=1.0,
-                        kld_scale=1.0
+                        kld_scale=1.0,
+                        deeper = False
                         ):
         """Builds the Slot Attention-based auto-encoder.
         Args:
@@ -585,7 +587,11 @@ class SlotAttentionAutoEncoder(nn.Module):
         self.num_iterations = num_iterations
         self.quantize = quantize
         
-        self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+        if deeper:
+            self.encoder_cnn = ResNet18(self.hid_dim)
+        else:
+            self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+    
         self.decoder_cnn = Decoder(self.hid_dim, self.resolution, kernel_size)
 
 
@@ -722,6 +728,23 @@ class SetPredictor(nn.Module):
 
 
 
+
+class ResNet18(nn.Module):
+
+    def __init__(self, hid_dim = 3, isTrained = True):
+        
+        super(ResNet18, self).__init__()
+        densenet = models.densenet121(pretrained= isTrained)
+        self.features    = densenet.features
+        kernelCount = densenet.classifier.in_features
+
+        self.hid_dim = nn.Conv2d(kernelCount, hid_dim, 1)
+
+    def forward(self, x):
+        x= self.features(x)
+        return self.hid_dim(x)
+
+
 class SlotAttentionClassifier(nn.Module):
   """Slot Attention-based classifier for property prediction."""
 
@@ -761,11 +784,17 @@ class SlotAttentionClassifier(nn.Module):
     self.num_iterations = num_iterations
     self.quantize = quantize
 
+    deeper = True
     # nclasses: numpber of nodes as outputs
     # In case of CLEVR: (coords=3) + (color=8) + (size=2) + (material=2) + (shape=3) + (real=1) = 19
     self.nproperties = nproperties
 
-    self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+    if deeper:
+        self.encoder_cnn = ResNet18(self.hid_dim)
+    else:
+        self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+    
+    
     self.slot_attention = SlotAttention(
                                 num_slots=self.num_slots,
                                 dim=hid_dim,
@@ -820,10 +849,12 @@ class SlotAttentionClassifier(nn.Module):
 
     # MC flatten
     slots = rearrange(slots, 'b m n d -> (b m) n d')
-    predictions = self.mlp_classifier(slots)
 
     slots = slots.view(image.shape[0], MCsamples, n_s, -1)
     slots = slots.mean(1)
+
+    predictions = self.mlp_classifier(slots)
+
     return predictions, cbidxs, qloss, perplexity
 
 
@@ -853,7 +884,7 @@ class ReasoningAttention(nn.Module):
 
 
 
-class SlotAttentionReasoning(nn.Module):
+class ReasoningClassifier(nn.Module):
     def __init__(self,
                     slot_dim, 
                     max_slots,
@@ -881,8 +912,7 @@ class SlotAttentionReasoning(nn.Module):
 
         self.property_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, nproperties),
-                                        nn.Sigmoid())
+                                        nn.Linear(hid_dim, nproperties))
 
 
         self.reasoning_classifier = nn.Sequential(nn.Linear(nproperties, nclasses))
@@ -912,6 +942,112 @@ class SlotAttentionReasoning(nn.Module):
         return class_logits
 
 
+
+class SlotAttentionReasoning(nn.Module):
+    """Slot Attention-based classifier for property prediction."""
+    def __init__(self, resolution, 
+                        num_slots, 
+                        num_iterations, 
+                        hid_dim, 
+                        nproperties,
+                        nclasses,
+                        max_slots=64, 
+                        nunique_slots=10,
+                        quantize=False,
+                        cosine=False, 
+                        cb_decay=0.99,
+                        encoder_res=4,
+                        decoder_res=4,
+                        kernel_size=5,
+                        cb_qk=False,
+                        eigen_quantizer=False,
+                        restart_cbstats=False,
+                        implicit=True,
+                        gumble=False,
+                        temperature=1.0,
+                        kld_scale=1.0,
+                        deeper=False):
+        super().__init__()
+
+        self.hid_dim = hid_dim
+        self.resolution = resolution
+        self.num_slots = num_slots
+        self.num_iterations = num_iterations
+        self.quantize = quantize
+
+        if deeper:
+            self.encoder_cnn = ResNet18(self.hid_dim)
+        else:
+            self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+
+
+        self.slot_attention = SlotAttention(
+                                num_slots=self.num_slots,
+                                dim=hid_dim,
+                                iters = self.num_iterations,
+                                eps = 1e-8, 
+                                hidden_dim = 128,
+                                nunique_slots=nunique_slots,
+                                quantize = quantize,
+                                max_slots=max_slots,
+                                cosine=cosine,
+                                cb_decay=cb_decay,
+                                encoder_intial_res=(encoder_res, encoder_res),
+                                decoder_intial_res=(decoder_res, decoder_res),
+                                cb_querykey=cb_qk,
+                                eigen_quantizer=eigen_quantizer,
+                                restart_cbstats=restart_cbstats,
+                                implicit=implicit,
+                                gumble=gumble,
+                                temperature=temperature,
+                                kld_scale=kld_scale)
+
+
+        self.classifier = ReasoningClassifier(self.hid_dim, 
+                                                max_slots,
+                                                nproperties, 
+                                                nclasses)
+    
+    
+
+    def forward(self, image, 
+                    num_slots=None, 
+                    MCsamples = 1,
+                    epoch=0, batch=0):
+
+        n_s = num_slots if num_slots is not None else self.num_slots   
+        MCsamples = MCsamples if self.quantize else 1  
+
+        # `image` has shape: [batch_size, width, height, num_channels].
+
+        # Convolutional encoder with position embedding.
+        x = self.encoder_cnn(image)  # CNN Backbone.
+        # `x` has shape: [batch_size, input_size, width, height].
+
+
+        
+        # Slot Attention module.
+        slots, cbidxs, qloss, perplexity, features = self.slot_attention(x, 
+                                                                num_slots,
+                                                                MCsamples = MCsamples, 
+                                                                epoch = epoch, 
+                                                                batch = batch, 
+                                                                images=image)
+        # `slots` has shape: [batch_size, MCsamples, num_slots, slot_size].
+        # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
+
+        # MC flatten
+        slots = rearrange(slots, 'b m n d -> (b m) n d')
+
+        slots = slots.view(image.shape[0], MCsamples, n_s, -1)
+        slots = slots.mean(1)
+
+        predictions = self.classifier(slots, cbidxs, epoch, batch)
+        return predictions, cbidxs, qloss, perplexity
+
+
+
+
 class DefaultCNN(nn.Module):
     def __init__(self,
                     resolution,
@@ -925,9 +1061,13 @@ class DefaultCNN(nn.Module):
         self.hid_dim = hid_dim
         self.encoder_res = encoder_res
         self.nclasses = nclasses 
+        deeper = True
 
-        self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
-
+        if deeper:
+            self.encoder_cnn = ResNet18(self.hid_dim)
+        else:
+            self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
+    
         self.classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
                                         nn.Linear(hid_dim, self.nclasses))
