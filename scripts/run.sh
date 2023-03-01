@@ -10,7 +10,9 @@ NAME=$9
 ITER=${10}
 
 NAME=$DATASET$VARIANT$NAME
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGSBSA-Baseline'
+IMPLICIT=True
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline'
+echo "========================IMPLICIT=============================="
 python /vol/biomedic3/agk21/testEigenSlots2/object_discovery.py \
                                             --dataset_name $DATASET \
                                             --variant $VARIANT \
@@ -23,6 +25,7 @@ python /vol/biomedic3/agk21/testEigenSlots2/object_discovery.py \
                                             --gumble $GUMBLE \
                                             --num_iterations $ITER \
                                             --cb_qk $CBQKEY \
+                                            --implicit $IMPLICIT \
                                             --eigen_quantizer $EIGENQUANTIZER \
                                             --restart_cbstats $CBRESTART
 

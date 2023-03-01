@@ -113,7 +113,6 @@ class SlotAttention(nn.Module):
 
         # ===========================================
 
-        self.to_q = nn.Linear(dim, dim)
         self.to_v = nn.Linear(dim, dim)
         self.to_k = nn.Linear(dim, dim)
 
@@ -121,6 +120,7 @@ class SlotAttention(nn.Module):
 
         hidden_dim = max(dim, hidden_dim)
 
+        self.to_q = nn.Linear(dim, dim)
         self.norm_slots  = nn.LayerNorm(dim)
         self.norm_pre_ff = nn.LayerNorm(dim)
         self.norm_input  = nn.LayerNorm(dim)
@@ -400,7 +400,7 @@ class SlotAttention(nn.Module):
         for _ in range(self.iters):
             slots = self.step(slots, k, v, MCsamples, n_s, b)
 
-        if self.implicit: slots = self.step(slots.detach(), k, v)
+        if self.implicit: slots = self.step(slots.detach(), k, v, MCsamples, n_s, b)
 
 
         # update slots ===================
@@ -912,7 +912,8 @@ class ReasoningClassifier(nn.Module):
 
         self.property_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, nproperties))
+                                        nn.Linear(hid_dim, nproperties),
+                                        nn.ReLU(inplace=True))
 
 
         self.reasoning_classifier = nn.Sequential(nn.Linear(nproperties, nclasses))

@@ -6,7 +6,6 @@ __pycache__/
 *LOG*
 *.pth
 *.ipynb_checkpoints
-*.ipynb
 *.png
 # C extensions
 *.so

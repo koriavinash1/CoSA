@@ -221,7 +221,7 @@ val_set = DataGenerator(root=opt.data_root,
                             class_info=True,
                             resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
+                        shuffle=False, num_workers=opt.num_workers, drop_last=True)
 
 test_set = DataGenerator(root=opt.data_root, 
                             mode='test',  
@@ -230,7 +230,7 @@ test_set = DataGenerator(root=opt.data_root,
                             class_info=True,
                             resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
+                        shuffle=False, num_workers=opt.num_workers, drop_last=True)
 
 
 train_epoch_size = min(50000, len(train_dataloader))

@@ -2,7 +2,7 @@ import os
 import argparse
 from src.dataset import DataGenerator
 from src.model import SlotAttentionAutoEncoder
-from src.metrics import calculate_fid, dice_loss
+from src.metrics import calculate_fid, calculate_sfid, dice_loss
 from src.utils import seed_everything, get_cb_variance, create_histogram, linear_warmup, visualize
 
 from tqdm import tqdm
@@ -93,7 +93,7 @@ if opt.dataset_name == 'bitmoji':
     opt.encoder_res = 8
     opt.decoder_res = 8
     opt.img_size = 64
-    opt.max_slots = 32
+    opt.max_slots = 64
     opt.nunique_objects = 9
     opt.kernel_size = 5
     opt.num_slots = 7
@@ -103,7 +103,7 @@ elif opt.dataset_name == 'clevr':
     opt.encoder_res = 8
     opt.decoder_res = 8
     opt.img_size = 64
-    opt.max_slots = 19
+    opt.max_slots = 64
     opt.kernel_size = 5
     opt.num_slots = 7
     opt.nunique_objects = 16
@@ -153,7 +153,7 @@ elif opt.dataset_name == 'objects_room':
     opt.encoder_res = 8
     opt.decoder_res = 8
     opt.img_size = 32
-    opt.max_slots = 16
+    opt.max_slots = 32
     opt.num_slots = 6
     opt.nunique_objects = 8
     opt.kernel_size = 3
@@ -165,7 +165,7 @@ elif opt.dataset_name == 'tetrominoes':
     opt.encoder_res = 8
     opt.decoder_res = 8
     opt.img_size = 32
-    opt.max_slots = 20
+    opt.max_slots = 32
     opt.nunique_objects = 16
     opt.num_slots = 5
     opt.kernel_size = 3
@@ -247,11 +247,11 @@ train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_s
 
 val_set = DataGenerator(root=opt.data_root, mode='val',  resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
+                        shuffle=False, num_workers=opt.num_workers, drop_last=True)
 
 test_set = DataGenerator(root=opt.data_root, mode='test',  resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
+                        shuffle=False, num_workers=opt.num_workers, drop_last=True)
 
 
 train_epoch_size = min(50000, len(train_dataloader))
@@ -472,3 +472,8 @@ for epoch in range(opt.num_epochs):
             print(f'FID Score: {fid}')
 
             writer.add_scalar('VALID/FID', fid, epoch//every_nepoch)
+
+            sfid = calculate_sfid(test_dataloader, model, opt.batch_size, 25, opt.model_dir)
+            print(f'SFID Score: {sfid}')
+
+            writer.add_scalar('VALID/SFID', sfid, epoch//every_nepoch)
