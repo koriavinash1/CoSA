@@ -87,7 +87,7 @@ if opt.dataset_name == 'clevr':
     opt.encoder_res = 4
     opt.decoder_res = 4
     opt.img_size = 128
-    opt.max_slots = 19
+    opt.max_slots = 64
     opt.kernel_size = 5
     opt.num_slots = 7
     opt.nunique_objects = 16

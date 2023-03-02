@@ -99,7 +99,6 @@ def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/
                                                 num_workers = 8)
 
 
-
 @torch.no_grad()
 def calculate_sfid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/CLEVR/FID' ):
     torch.cuda.empty_cache()
@@ -148,6 +147,61 @@ def calculate_sfid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp
                                                 batch_size= 256, 
                                                 num_workers = 8) for i in range(model.num_slots)]
     return np.mean(fid_list)
+
+
+
+
+
+@torch.no_grad()
+def compositional_fid(loader, 
+                        model,
+                        ns=10,
+                        device=0, 
+                        batch_size=16, 
+                        num_batches=100, 
+                        fid_dir='./tmp/CLEVR/FID' ):
+
+    torch.cuda.empty_cache()
+
+    real_path = os.path.join(fid_dir, 'real')
+    fake_path = os.path.join(fid_dir, 'fake')
+
+    os.makedirs(real_path, exist_ok=True)
+    os.makedirs(fake_path, exist_ok=True)
+    # remove any existing files used for fid calculation and recreate directories
+
+    if len(os.listdir(real_path)) < 10 :
+        rmtree(real_path, ignore_errors=True)
+        os.makedirs(real_path)
+
+        for batch_num, samples in tqdm(enumerate(loader), desc='calculating FID - saving reals'):
+            real_batch = samples['image']
+            for k, image in enumerate(real_batch.cpu()):
+                filename = str(k + batch_num * batch_size)
+                torchvision.utils.save_image(image, os.path.join(real_path, f'{filename}.png'))
+
+    # generate a bunch of fake images in results / name / fid_fake
+
+    rmtree(fake_path, ignore_errors=True)
+    os.makedirs(fake_path)
+
+    model.eval()
+   
+    for batch_num, samples in tqdm(enumerate(loader), desc='calculating FID - saving generated'):
+
+        image = samples['image'].to(model.device)
+        recon_combined, *_ = model.object_composition(n_s=ns,
+                                                        b=batch_size,
+                                                        device=device)
+       
+        for j, image in enumerate(recon_combined.cpu()):
+            torchvision.utils.save_image(image, os.path.join(fake_path, f'{str(j + batch_num * batch_size)}.png'))
+
+    return fid_score.calculate_fid_given_paths(paths = [str(real_path), str(fake_path)], 
+                                                dims = 2048, 
+                                                device=0,
+                                                batch_size= 256, 
+                                                num_workers = 8)
 
 
 

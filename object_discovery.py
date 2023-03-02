@@ -2,7 +2,7 @@ import os
 import argparse
 from src.dataset import DataGenerator
 from src.model import SlotAttentionAutoEncoder
-from src.metrics import calculate_fid, calculate_sfid, dice_loss
+from src.metrics import calculate_fid, calculate_sfid, compositional_fid, dice_loss
 from src.utils import seed_everything, get_cb_variance, create_histogram, linear_warmup, visualize
 
 from tqdm import tqdm

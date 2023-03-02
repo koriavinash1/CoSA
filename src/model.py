@@ -710,6 +710,51 @@ class SlotAttentionAutoEncoder(nn.Module):
         return recon_combined, recons, masks, slots, cbidxs, qloss, perplexity
 
 
+    def object_composition(self, idxs=None, n_s=7, b=32, device=0):
+        
+        if self.quantize:
+            if idxs == None:
+                slot_idxs = torch.tensor(np.random.randint(0, self.max_slots, (b, n_s))).to(device)
+            else:
+                slot_idxs = torch.tensor(idxs).to(device)
+
+            encodings = torch.zeros(b*n_s, self.max_slots, device=device)
+            encodings.scatter_(1, slot_idxs.reshape(-1, 1), 1)
+
+            slots = self.slot_attention.slot_quantizer.qkclass.sample_slots(encodings,
+                                                                            (b, n_S, self.dim))
+        else:
+            slots_mu = self.slot_attention.slots_mu.expand(b, n_s, -1)
+            slot_sigma = self.slot_attention.slots_sigma.expand(b, n_s, -1)
+            slot_sigma = torch.exp(0.5*slot_sigma)
+
+            slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
+                                                        device = device, 
+                                                        dtype = slot_sigma.dtype)
+
+
+        features = self.slot_attention.decoder_transformation(slots)
+        # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
+
+        x = self.decoder_cnn(features)
+        x = x.permute(0, 2, 3, 1)
+        # `x` has shape: [batch_size*num_slots, width, height, num_channels+1].
+
+        # Undo combination of slot and batch dimension; split alpha masks.
+        recons, masks = x.reshape(b, n_s, x.shape[1], x.shape[2], x.shape[3]).split([3,1], dim=-1)
+        # `recons` has shape: [batch_size, num_slots, width, height, num_channels].
+        # `masks` has shape: [batch_size, num_slots, width, height, 1].
+
+        # Normalize alpha masks over slots.
+        masks = nn.Softmax(dim=1)(masks)
+        recon_combined = torch.sum(recons * masks, dim=2)  # Recombine image.
+
+        recon_combined = recon_combined.permute(0, 3, 1, 2)
+        # `recon_combined` has shape: [batch_size, width, height, num_channels].
+
+        return recon_combined, recons, masks, slots
+
+
 
 class SetPredictor(nn.Module):
     def __init__(self,
@@ -890,6 +935,7 @@ class ReasoningClassifier(nn.Module):
                     max_slots,
                     nproperties, 
                     nclasses,
+                    nslots,
                     hid_dim=64
                     ):
         """Builds the Slot Attention-based auto-encoder.
@@ -902,6 +948,7 @@ class ReasoningClassifier(nn.Module):
         self.hid_dim = hid_dim
         self.nclasses = nclasses
         self.max_slots = max_slots
+        self.nslots = nslots
 
         self.fc1_w = nn.Parameter(uniform_init(max_slots, slot_dim, hid_dim))
         self.fc1_b = nn.Parameter(uniform_init(max_slots, hid_dim))
@@ -912,10 +959,10 @@ class ReasoningClassifier(nn.Module):
 
         self.property_classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, nproperties),
-                                        nn.ReLU(inplace=True))
+                                        nn.Linear(hid_dim, nproperties))
 
 
+        self.attn = nn.Parameter(uniform_init(max_slots, 1))
         self.reasoning_classifier = nn.Sequential(nn.Linear(nproperties, nclasses))
 
 
@@ -933,11 +980,14 @@ class ReasoningClassifier(nn.Module):
         fc2w = torch.einsum('bnd,dgk->bngk',encodings, self.fc2_w)
         fc2b = torch.einsum('bnd,dg->bng',encodings, self.fc2_b)
 
+        attn = torch.einsum('bnd,dg->bng',encodings, self.attn)
+
+
         # apply transformation ===============
         properties = F.relu(torch.einsum('bnd,bndw->bnw', slots, fc1w) + fc1b)
         properties = F.relu(torch.einsum('bnd,bndw->bnw', properties, fc2w) + fc2b) 
 
-        properties = properties.sum(1)
+        properties = torch.einsum('bnp,bng->bpg', properties, attn).squeeze(-1)
         class_logits = self.reasoning_classifier(properties)
 
         return class_logits
@@ -1007,7 +1057,8 @@ class SlotAttentionReasoning(nn.Module):
         self.classifier = ReasoningClassifier(self.hid_dim, 
                                                 max_slots,
                                                 nproperties, 
-                                                nclasses)
+                                                nclasses,
+                                                num_slots)
     
     
 
