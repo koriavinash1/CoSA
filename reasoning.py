@@ -63,7 +63,7 @@ parser.add_argument('--kld_scale', type=float, default=1.0, help='kl distance we
 
 # training parameters
 parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
-parser.add_argument('--learning_rate', default=0.001, type=float, help='training learning rate')
+parser.add_argument('--learning_rate', default=0.0004, type=float, help='training learning rate')
 parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 parser.add_argument('--implicit', type=str2bool, default=False, help="use implicit neumann's approximation for computing fixed point")

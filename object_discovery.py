@@ -10,6 +10,7 @@ import time, math
 from datetime import datetime, timedelta
 from torch.nn.utils import clip_grad_norm_
 
+import pandas as pd
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
@@ -67,7 +68,7 @@ parser.add_argument('--kld_scale', type=float, default=1.0, help='kl distance we
 # training parameters
 parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
 parser.add_argument('--learning_rate', default=0.0004, type=float, help='training learning rate')
-parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
+parser.add_argument('--num_epochs', default=50, type=int, help='number of workers for loading data')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 parser.add_argument('--implicit', type=str2bool, default=False, help="use implicit neumann's approximation for computing fixed point")
 parser.add_argument('--overlap_weightage', type=float, default=0.0, help='use mask overlap as a regularization constraints')
@@ -269,6 +270,7 @@ opt.log_interval = train_epoch_size // 5
 
 def training_step(model, optimizer, epoch, opt):
     idxs = []
+    cbd = 0; cbp = 0
     total_loss = 0; recon_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         if ibatch > train_epoch_size: break
@@ -288,6 +290,12 @@ def training_step(model, optimizer, epoch, opt):
         quant_loss += qloss.item()
         overlap_loss += overlap_loss_.item()
 
+        if opt.quantize:
+            cbd_ = get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item()
+        else: cbd_ = 0.0        
+
+        cbd += cbd_
+        cbp += perplexity.item()
 
         optimizer.zero_grad()
         loss.backward()
@@ -304,7 +312,7 @@ def training_step(model, optimizer, epoch, opt):
                 writer.add_scalar('TRAIN/opi', overlap_loss_.item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/cbp', perplexity.item(), global_step)
-                if opt.quantize: writer.add_scalar('TRAIN/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+                if opt.quantize: writer.add_scalar('TRAIN/cbd', cbd_, global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
                 writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
         
@@ -322,6 +330,8 @@ def training_step(model, optimizer, epoch, opt):
                         'recon_loss': recon_loss*1.0/train_epoch_size,
                         'quant_loss': quant_loss*1.0/train_epoch_size,
                         'overlap_loss': overlap_loss*1.0/train_epoch_size,
+                        'cbd': cbd*1.0/train_epoch_size,
+                        'cbp': cbp*1.0/train_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
 
     return return_stats
@@ -330,6 +340,8 @@ def training_step(model, optimizer, epoch, opt):
 @torch.no_grad()
 def validation_step(model, optimizer, epoch, opt):
     idxs = []
+
+    cbp = 0; cbd = 0
     total_loss = 0; recon_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(val_dataloader)):
         if ibatch > val_epoch_size: break
@@ -350,6 +362,12 @@ def validation_step(model, optimizer, epoch, opt):
         quant_loss += qloss.item()
         overlap_loss += overlap_loss_.item()
 
+        if opt.quantize:
+            cbd_ = get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item()
+        else: cbd_ = 0.0
+        cbd += cbd_
+        cbp += perplexity.item()
+
 
         idxs.append(cbidxs)
 
@@ -359,7 +377,7 @@ def validation_step(model, optimizer, epoch, opt):
             writer.add_scalar('VALID/opi', overlap_loss_.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/quant', qloss.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/cbp', perplexity.item(), global_step)
-            if opt.quantize: writer.add_scalar('VALID/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+            if opt.quantize: writer.add_scalar('VALID/cbd', cbd_, global_step)
             if opt.quantize: writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
             writer.add_scalar('VALID/lr', optimizer.param_groups[0]['lr'], global_step)
 
@@ -376,6 +394,8 @@ def validation_step(model, optimizer, epoch, opt):
                         'recon_loss': recon_loss*1.0/val_epoch_size,
                         'quant_loss': quant_loss*1.0/val_epoch_size,
                         'overlap_loss': overlap_loss*1.0/val_epoch_size,
+                        'cbd': cbd*1.0/val_epoch_size,
+                        'cbp': cbp*1.0/val_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
     return return_stats
 
@@ -384,11 +404,16 @@ def validation_step(model, optimizer, epoch, opt):
 start = time.time()
 min_recon_loss = 1000000.0
 counter = 0
-patience = 5
+patience = 3
 lrscheduler = ReduceLROnPlateau(optimizer, 'min', 
                                 patience=patience,
                                 factor=0.5,
                                 verbose = True)
+
+
+
+
+history = {'EP':[], 'MSE': [], 'OPI': [], 'CBD': [], 'CBP': [], 'FID': [], 'SFID': [], 'QLOSS': []}
 
 
 for epoch in range(opt.num_epochs):
@@ -443,7 +468,7 @@ for epoch in range(opt.num_epochs):
                 ckpt = torch.load(os.path.join(opt.model_dir, f'discovery_best.pth'))
                 model.load_state_dict(ckpt['model_state_dict'])
             
-            if counter > 5*patience:
+            if counter > 2*patience:
                 print('Early Stopping: --------------')
                 break
 
@@ -477,3 +502,19 @@ for epoch in range(opt.num_epochs):
             print(f'SFID Score: {sfid}')
 
             writer.add_scalar('VALID/SFID', sfid, epoch//every_nepoch)
+
+
+        # update csv_data=========================
+
+        history['EP'].append(epoch)
+        history['MSE'].append(validation_stats['recon_loss']*3*opt.img_size**2)
+        history['OPI'].append(validation_stats['overlap_loss'])
+        history['CBD'].append(validation_stats['cbd'])
+        history['CBP'].append(validation_stats['cbp'])
+        history['FID'].append(fid)
+        history['SFID'].append(sfid)
+        history['QLOSS'].append(validation_stats['quant_loss'])
+
+        # update logs--------------------------
+        df = pd.DataFrame(history)
+        df.to_csv(os.path.join(opt.model_dir, 'logs.csv')) 

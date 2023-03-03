@@ -10,9 +10,10 @@ NAME=$9
 ITER=${10}
 
 NAME=$DATASET$VARIANT$NAME
-IMPLICIT=True
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGS-LEMMA2'
-echo "========================IMPLICIT=============================="
+IMPLICIT=False
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGS-NOIMPLICIT'
+
+# echo "========================IMPLICIT=============================="
 python /vol/biomedic3/agk21/testEigenSlots2/object_discovery.py \
                                             --dataset_name $DATASET \
                                             --variant $VARIANT \

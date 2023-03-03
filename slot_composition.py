@@ -36,9 +36,10 @@ def get_computational_fid(config):
     print(exp_arguments)
     print ('='*25)
 
+    resolution = (exp_arguments['img_size'], exp_arguments['img_size'])
     # ===========================================
     # model init
-    model = SlotAttentionAutoEncoder((exp_arguments['img_size'], exp_arguments['img_size']), 
+    model = SlotAttentionAutoEncoder(resolution, 
                                         exp_arguments['num_slots'], 
                                         exp_arguments['num_iterations'], 
                                         exp_arguments['hid_dim'],
@@ -75,24 +76,26 @@ def get_computational_fid(config):
 
     test_epoch_size = min(10000, len(test_dataloader))
 
-    CFID = compositional_fid(test_dataloader,
+    CFID, CSFID = compositional_fid(test_dataloader,
+                                sfid        = True,
                                 model       = model,
                                 ns          = opt.num_slots,
                                 device      = device,
                                 batch_size  = opt.batch_size,
-                                num_batches = opt.num_batches)
+                                num_batches = opt.num_batches,
+                                fid_dir     = os.path.join('LOGS-IMAGECOMPOSITION', exp_arguments['exp_name']))
 
-    print(CFID, '====================')
-    return CFID
+    print(CFID, CSFID, '====================')
+    return CFID, CSFID
 
 
 if __name__ == '__main__':
     configs = [
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/tetrominoesdefaulttest/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/objects_roomdefaulttest/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/ffhqdefaulttest/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/clevrdefaulttest/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/bitmojidefaulttest/exp-parameters.json',
+        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/tetrominoesdefaulttest/exp-parameters.json',
+        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/objects_roomdefaulttest/exp-parameters.json',
+        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/ffhqdefaulttest/exp-parameters.json',
+        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/clevrdefaulttest/exp-parameters.json',
+        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/bitmojidefaulttest/exp-parameters.json',
         '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultCosine/exp-parameters.json',
         '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultGumble/exp-parameters.json',
         '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultEuclidian/exp-parameters.json',
@@ -111,9 +114,13 @@ if __name__ == '__main__':
     ]
     
     cfids = []
+    csfids = []
 
-    for config in configs:
-        cfids.append(get_computational_fid(config))
+    for i, config in enumerate(configs):
+        fid, sfid = get_computational_fid(config)
 
-    df = pd.DataFrame({'config': configs, 'CFID': cfids})
-    df.to_csv('compositional_fids_allconfigs.csv')
+        cfids.append(fid)
+        csfids.append(sfid)
+
+        df = pd.DataFrame({'config': configs[:i+1], 'CFID': cfids, 'CSFID': csfids})
+        df.to_csv('./compositional_fids_allconfigs.csv')

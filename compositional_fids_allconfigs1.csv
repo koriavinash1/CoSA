@@ -1,0 +1,17 @@
+,config,CFID,CSFID
+0,/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/tetrominoesdefaulttest/exp-parameters.json,141.22990455076587,337.96369924891565
+1,/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/objects_roomdefaulttest/exp-parameters.json,281.9969147103354,278.7992990237802
+2,/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/ffhqdefaulttest/exp-parameters.json,298.064133888696,234.6407636219004
+3,/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/clevrdefaulttest/exp-parameters.json,249.21349824777698,249.11581259155278
+4,/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/bitmojidefaulttest/exp-parameters.json,269.81283761709295,249.39946006822038
+5,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultCosine/exp-parameters.json,192.2224774999604,356.75893672019095
+6,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultGumble/exp-parameters.json,208.20379677435125,362.510809251433
+7,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultEuclidian/exp-parameters.json,123.13615415668035,419.63171158983914
+8,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/objects_roomdefaultCosine/exp-parameters.json,244.96245016012165,251.34705427638715
+9,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/objects_roomdefaultGumble/exp-parameters.json,232.73396886132025,247.266141400092
+10,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/objects_roomdefaultEuclidian/exp-parameters.json,322.7234918157495,287.0947775643673
+11,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/ffhqdefaultCosine/exp-parameters.json,357.73565640696745,274.6471086360355
+12,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/ffhqdefaultGumble/exp-parameters.json,299.9634675298495,256.7063219011618
+13,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/ffhqdefaultEuclidian/exp-parameters.json,315.34810233960746,328.3987580204343
+14,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/clevrdefaultGumble/exp-parameters.json,231.67660320416545,317.3447902878585
+15,/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/clevrdefaultCosine/exp-parameters.json,315.08340111610187,334.7501471281241

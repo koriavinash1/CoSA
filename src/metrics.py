@@ -159,6 +159,7 @@ def compositional_fid(loader,
                         device=0, 
                         batch_size=16, 
                         num_batches=100, 
+                        sfid=True,
                         fid_dir='./tmp/CLEVR/FID' ):
 
     torch.cuda.empty_cache()
@@ -185,25 +186,49 @@ def compositional_fid(loader,
     rmtree(fake_path, ignore_errors=True)
     os.makedirs(fake_path)
 
+    if sfid:
+        for i in range(ns):
+            os.makedirs(os.path.join(fake_path, f'slots-{i}'), exist_ok=True)
+   
     model.eval()
    
     for batch_num, samples in tqdm(enumerate(loader), desc='calculating FID - saving generated'):
 
         image = samples['image'].to(model.device)
-        recon_combined, *_ = model.object_composition(n_s=ns,
+        recon_combined, recons, masks, slots = model.object_composition(n_s=ns,
+                                                        x = image,
                                                         b=batch_size,
                                                         device=device)
-       
+        recons = recons* masks + (1 - masks)
+
+
+
         for j, image in enumerate(recon_combined.cpu()):
             torchvision.utils.save_image(image, os.path.join(fake_path, f'{str(j + batch_num * batch_size)}.png'))
 
-    return fid_score.calculate_fid_given_paths(paths = [str(real_path), str(fake_path)], 
+        if sfid:
+            for i in range(ns):
+                for j, image in enumerate(recons[:, i, ...].cpu()):
+                    torchvision.utils.save_image(image.permute(2, 0, 1), os.path.join(fake_path, f'slots-{i}', f'{str(j + batch_num * batch_size)}.png'))
+
+
+    fidvalue = fid_score.calculate_fid_given_paths(paths = [str(real_path), str(fake_path)], 
                                                 dims = 2048, 
                                                 device=0,
                                                 batch_size= 256, 
                                                 num_workers = 8)
 
+    if sfid:
+        fid_list = [fid_score.calculate_fid_given_paths(paths = [str(real_path), os.path.join(str(fake_path), f'slots-{i}')], 
+                                                dims = 2048, 
+                                                device=0,
+                                                batch_size= 256, 
+                                                num_workers = 8) for i in range(ns)]
+        sfidvalue = np.mean(fid_list)
 
+        return fidvalue, sfidvalue
+        
+    return fidvalue
 
 
 # set prediction evaluation metrics
