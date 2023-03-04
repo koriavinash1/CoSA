@@ -196,7 +196,6 @@ def compositional_fid(loader,
 
         image = samples['image'].to(model.device)
         recon_combined, recons, masks, slots = model.object_composition(n_s=ns,
-                                                        x = image,
                                                         b=batch_size,
                                                         device=device)
         recons = recons* masks + (1 - masks)

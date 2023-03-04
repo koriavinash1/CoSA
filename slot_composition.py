@@ -90,28 +90,7 @@ def get_computational_fid(config):
 
 
 if __name__ == '__main__':
-    configs = [
-        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/tetrominoesdefaulttest/exp-parameters.json',
-        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/objects_roomdefaulttest/exp-parameters.json',
-        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/ffhqdefaulttest/exp-parameters.json',
-        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/clevrdefaulttest/exp-parameters.json',
-        # '/vol/biomedic3/agk21/testEigenSlots2/LOGS-SA-Baseline/ObjectDiscovery/bitmojidefaulttest/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultCosine/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultGumble/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/tetrominoesdefaultEuclidian/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/objects_roomdefaultCosine/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/objects_roomdefaultGumble/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/objects_roomdefaultEuclidian/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/ffhqdefaultCosine/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/ffhqdefaultGumble/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/ffhqdefaultEuclidian/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/clevrdefaultGumble/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/clevrdefaultCosine/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/clevrdefaultEuclidian/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/bitmojidefaultGumble/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/bitmojidefaultEuclidian/exp-parameters.json',
-        '/vol/biomedic3/agk21/testEigenSlots2/LOGS-BSA-Baseline/ObjectDiscovery/bitmojidefaultCosine/exp-parameters.json',
-    ]
+    configs = ['/vol/biomedic3/agk21/testEigenSlots2/LOGS-NOIMPLICIT/ObjectDiscovery/tetrominoesdefaultCosine/exp-parameters.json']
     
     cfids = []
     csfids = []

@@ -79,6 +79,7 @@ class SlotAttention(nn.Module):
         self.cb_querykey = cb_querykey
         self.eigen_quantizer = eigen_quantizer
         self.restart_cbstats = restart_cbstats
+        self.resolution = encoder_intial_res
         ntokens = np.prod(encoder_intial_res)
         
         self.max_slots = max_slots
@@ -399,37 +400,46 @@ class SlotAttention(nn.Module):
 
 
     @torch.no_grad()
-    def given_idxs(self, inputs, 
-                        slot_idxs,
+    def given_idxs(self, slot_idxs,
+                        n_s = 7,
                         MCsamples = 1,
                         images=None):
-        b, d, w, h = inputs.shape
-        n_s = slot_idxs.shape[1]
-
-        # Compute Projections ========================
-        inputs_features = self.encoder_transformation(inputs, position = True)
-        inputs_features = self.norm_input(inputs_features)
+        
+        b = slot_idxs.shape[0]
+        d = self.dim
+        w,h = self.resolution
 
         # sample slots ==============================
-        qloss = torch.Tensor([0]).to(inputs.device)
-        perplexity = torch.Tensor([[0]]).to(inputs.device)
+        qloss = torch.Tensor([0]).to(slot_idxs.device)
+        perplexity = torch.Tensor([[0]]).to(slot_idxs.device)
 
         shape = slot_idxs.shape
-        encodings = torch.zeros(np.prod(shape), self.max_slots, device=inputs.device)
+        encodings = torch.zeros(np.prod(shape), self.max_slots, device=slot_idxs.device)
         encodings.scatter_(1, slot_idxs.reshape(-1, 1), 1)
 
-        slots = self.slot_quantizer.qkclass.sample_slots(encodings, (b, n_s, self.dim))
-        slots = slots.view(b, MCsamples, n_s, -1)
+
+        # Input features ===========================
+        inputs = self.slot_quantizer.get_encodings(encodings)
+        inputs = inputs.view(b, w, h, d).permute(0,3,1,2)
+        inputs = self.encoder_transformation(inputs, position=True)
+        inputs = self.norm_input(inputs)
+
+
+        # Slot slection =======================
+        slots = self.slot_quantizer.qkclass.sample_slots(encodings, (b, w*h, self.dim))
+        slots = slots.view(b, MCsamples, -1, d)
+        slots = slots[:, :, :n_s, :]
+
 
         # # Key-Value projection vectors ====================
-        # k = self.to_k(inputs_features)
-        # v = self.to_v(inputs_features)
+        k = self.to_k(inputs)
+        v = self.to_v(inputs)
 
         # # Slot attention =========================
-        # for _ in range(self.iters):
-        #     slots = self.step(slots, k, v, MCsamples, n_s, b)
+        for _ in range(self.iters):
+            slots = self.step(slots, k, v, MCsamples, n_s, b)
 
-        # if self.implicit: slots = self.step(slots.detach(), k, v)
+        if self.implicit: slots = self.step(slots.detach(), k, v)
 
         return slots, slot_idxs, qloss, perplexity, self.decoder_transformation(slots)
 
@@ -571,6 +581,7 @@ class SlotAttentionAutoEncoder(nn.Module):
         self.hid_dim = hid_dim
         self.resolution = resolution
         self.num_slots = num_slots
+        self.encoder_res = encoder_res
         self.num_iterations = num_iterations
         self.quantize = quantize
         self.max_slots = max_slots
@@ -699,54 +710,31 @@ class SlotAttentionAutoEncoder(nn.Module):
         return recon_combined, recons, masks, slots, cbidxs, qloss, perplexity
 
 
-    def object_composition(self, x=None , idxs=None, n_s=7, b=32, device=0):
+    def object_composition(self, idxs=None, n_s=7, b=32, device=0):
         
-        if self.quantize:
+        if not self.quantize: 
+            raise 'Baseline slot attention does not support object composition' 
 
-            if not (x is None):
-                inputs = self.encoder_cnn(x) 
-
-                inputs_features_np = self.slot_attention.encoder_transformation(inputs, position = False)
-                inputs_features_np = self.slot_attention.norm_input_np(inputs_features_np)
-                k_np = self.slot_attention.to_k_np(inputs_features_np)
-                slots, objects, qloss, perplexity, slot_idxs = self.slot_attention.sample_quantized_slots(n_s = n_s, 
-                                                                        k = k_np)
+        if idxs == None:
+            # rand_idxs = []
+            # idxs = np.arange(self.max_slots)
+            # for _ in range(b):
+            #     np.random.shuffle(idxs)
+            #     rand_idxs.append(idxs[:(self.encoder_res**2)])
             
-            else:                                                        
-                if idxs == None:
-                    rand_idxs = []
-                    idxs = np.arange(self.max_slots)
-                    for _ in range(b):
-                        np.random.shuffle(idxs)
-                        rand_idxs.append(idxs[:n_s])
-                    rand_idxs = np.array(rand_idxs)
-
-                    slot_idxs = torch.tensor(rand_idxs).to(device)
-                else:
-                    slot_idxs = torch.tensor(idxs).to(device)
-
-                encodings = torch.zeros(b*n_s, self.max_slots, device=device)
-                encodings.scatter_(1, slot_idxs.reshape(-1, 1), 1)
-
-                slots = self.slot_attention.slot_quantizer.qkclass.sample_slots(encodings,
-                                                                            (b, n_s, self.dim))
+            rand_idxs = np.random.randint(0, self.max_slots, (b, self.encoder_res**2))
+            slot_idxs = torch.tensor(rand_idxs).to(device)
         else:
-            slot_mu = self.slot_attention.slots_mu.expand(b, n_s, -1)
-            slot_sigma = self.slot_attention.slots_sigma.expand(b, n_s, -1)
-            slot_sigma = torch.exp(0.5*slot_sigma)
+            slot_idxs = torch.tensor(idxs).to(device)
 
-            slots = slot_mu + slot_sigma * torch.randn(slot_sigma.shape, 
-                                                        device = device, 
-                                                        dtype = slot_sigma.dtype)
-
-
-        features = self.slot_attention.decoder_transformation(slots)
-        # `features` has shape: [batch_size*num_slots, width_init, height_init, slot_size]
+        # Slot Attention module.
+        slots, cbidxs, qloss, perplexity, features = self.slot_attention.given_idxs(slot_idxs, n_s)
+        # `slots` has shape: [batch_size, MCsamples, num_slots, slot_size].
+        # `features` has shape: [batch_size*MCsamples*num_slots, width_init, height_init, slot_size]
 
         x = self.decoder_cnn(features)
-
         x = x.permute(0, 2, 3, 1)
-        # `x` has shape: [batch_size*num_slots, width, height, num_channels+1].
+        # `x` has shape: [batch_size*MCsamples*num_slots, width, height, num_channels+1].
 
         # Undo combination of slot and batch dimension; split alpha masks.
         recons, masks = x.reshape(b, n_s, x.shape[1], x.shape[2], x.shape[3]).split([3,1], dim=-1)
@@ -761,7 +749,6 @@ class SlotAttentionAutoEncoder(nn.Module):
         # `recon_combined` has shape: [batch_size, width, height, num_channels].
 
         return recon_combined, recons, masks, slots
-
 
 
 class SetPredictor(nn.Module):

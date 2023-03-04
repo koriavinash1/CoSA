@@ -110,6 +110,12 @@ class BaseVectorQuantizer(nn.Module):
             self._embedding.weight.requires_grad = True
 
 
+    def get_encodings(self, encodings):
+        quantized = torch.matmul(encodings, self._embedding.weight)
+        quantized = self.project_out(quantized)
+        quantized = self.norm_out(quantized)
+        return quantized
+
     def vq_sample(self, features, 
                         hard = False, 
                         idxs=None, 
