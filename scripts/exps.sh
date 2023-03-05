@@ -47,11 +47,11 @@ TASKTYPE='OD'
 
 # =========================================================================
 # Lemma 1: validation 
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False test1 1
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False test2 2
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False test3 3
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False test4 4
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False test5 5
+./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline1 1
+./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline2 2
+./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline3 3
+./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline4 4
+./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline5 5
 
 
 ./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian1 1

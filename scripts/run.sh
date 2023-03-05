@@ -12,7 +12,8 @@ ITER=${10}
 NAME=$DATASET$VARIANT$NAME
 IMPLICIT=False
 # LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2' # (45942- 45961)
-LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGS-NOIMPLICIT-LEMMA1' # (45942- 45961)
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGS-NOIMPLICIT-LEMMA1' # (45967- 45986)
+LOGS='/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT-LEMMA1' # (45987- 46006)
 
 # echo "========================IMPLICIT=============================="
 python /vol/biomedic3/agk21/testEigenSlots2/object_discovery.py \
