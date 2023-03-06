@@ -181,6 +181,21 @@ def compositional_fid(loader,
                 filename = str(k + batch_num * batch_size)
                 torchvision.utils.save_image(image, os.path.join(real_path, f'{filename}.png'))
 
+    model.eval()
+
+    # Generate undead codes
+    dictionary_codes = []
+    for batch_num, samples in tqdm(enumerate(loader), desc='generating propmt prior'):
+        if batch_num > 100: break
+
+        image = samples['image'].to(model.device)
+        recon_combined, recons, masks, slots, cbidxs, qloss, perplexity = model(image)
+        dictionary_codes.append(cbidxs)
+
+    dictionary_codes = torch.cat(dictionary_codes, 0)
+    dictionary_codes = torch.unique(dictionary_codes).detach().cpu().numpy()
+
+    print (f'Prior indxs: {dictionary_codes}=========*************************')
     # generate a bunch of fake images in results / name / fid_fake
 
     rmtree(fake_path, ignore_errors=True)
@@ -190,12 +205,13 @@ def compositional_fid(loader,
         for i in range(ns):
             os.makedirs(os.path.join(fake_path, f'slots-{i}'), exist_ok=True)
    
-    model.eval()
+
    
     for batch_num, samples in tqdm(enumerate(loader), desc='calculating FID - saving generated'):
 
         image = samples['image'].to(model.device)
         recon_combined, recons, masks, slots = model.object_composition(n_s=ns,
+                                                        prior=dictionary_codes,
                                                         b=batch_size,
                                                         device=device)
         recons = recons* masks + (1 - masks)

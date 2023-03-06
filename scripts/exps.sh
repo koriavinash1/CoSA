@@ -47,32 +47,32 @@ TASKTYPE='OD'
 
 # =========================================================================
 # Lemma 1: validation 
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline1 1
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline2 2
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline3 3
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline4 4
-./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline5 5
+# ./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline1 1
+# ./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline2 2
+# ./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline3 3
+# ./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline4 4
+# ./slurm-wrapper.sh $TASKTYPE clevr default False False False False False False Baseline5 5
 
 
-./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian1 1
-./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian2 2
-./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian3 3
-./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian4 4
-./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian5 5
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian1 1
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian2 2
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian3 3
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian4 4
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False False True False True Euclidian5 5
 
 
-./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine1 1
-./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine2 2
-./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine3 3
-./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine4 4
-./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine5 5
+# ./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine1 1
+# ./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine2 2
+# ./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine3 3
+# ./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine4 4
+# ./slurm-wrapper.sh $TASKTYPE clevr default True True False True False True Cosine5 5
 
 
-./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble1 1
-./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble2 2
-./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble3 3
-./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble4 4
-./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble5 5
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble1 1
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble2 2
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble3 3
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble4 4
+# ./slurm-wrapper.sh $TASKTYPE clevr default True False True True False True Gumble5 5
 
 
 
@@ -106,22 +106,5 @@ TASKTYPE='SP'
 # =========================================================================
 TASKTYPE='RE'
 
-#  Baseline ------------------------
-# ./slurm-wrapper.sh $TASKTYPE clevr hans3 False False False default
-# ./slurm-wrapper.sh $TASKTYPE clevr hans7 False False False default
-# ./slurm-wrapper.sh $TASKTYPE ffhq default False False False default
-
-# Euclidian codebook
-# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False False default
-# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True False False default
-# ./slurm-wrapper.sh $TASKTYPE ffhq default True False False default
-
-# Cosine codebook
-# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True True False default
-# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True True False default
-# ./slurm-wrapper.sh $TASKTYPE ffhq default True True False default
-
-# Gumble codebook
-# ./slurm-wrapper.sh $TASKTYPE clevr hans3 True False True default
-# ./slurm-wrapper.sh $TASKTYPE clevr hans7 True False True default
-# ./slurm-wrapper.sh $TASKTYPE ffhq default True False True default
+./slurm-wrapper.sh $TASKTYPE clevr hans3 default
+./slurm-wrapper.sh $TASKTYPE clevr hans7 default

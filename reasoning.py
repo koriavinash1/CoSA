@@ -29,7 +29,7 @@ def str2bool(v):
 
 
 # exp setup information
-parser.add_argument('--model_dir', default='LOGSReasoning', type=str, help='where to save models' )
+parser.add_argument('--model_dir', default='LOGSReasoning2', type=str, help='where to save models' )
 parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
 parser.add_argument('--seed', default=0, type=int, help='random seed')
 
@@ -39,6 +39,7 @@ parser.add_argument('--variant', default='hans3', type=str, help='where to save 
 parser.add_argument('--img_size', default=128, type=int, help='image size')
 parser.add_argument('--nproperties', default=19, type=int, help='total number properties in clevr dataset')
 parser.add_argument('--nclasses', default=3, type=int, help='total number classes clevr dataset')
+parser.add_argument('--reasoning_type', default='default', type=str, help='total number classes clevr dataset')
 
 # model information
 parser.add_argument('--kernel_size', default=5, type=int, help='convolutional kernel size')
@@ -65,8 +66,8 @@ parser.add_argument('--kld_scale', type=float, default=1.0, help='kl distance we
 # training parameters
 parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
 parser.add_argument('--learning_rate', default=0.0004, type=float, help='training learning rate')
-parser.add_argument('--num_epochs', default=40, type=int, help='number of workers for loading data')
-parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
+parser.add_argument('--num_epochs', default=500, type=int, help='number of workers for loading data')
+parser.add_argument('--num_workers', default=1, type=int, help='number of workers for loading data')
 parser.add_argument('--implicit', type=str2bool, default=False, help="use implicit neumann's approximation for computing fixed point")
 
 # unused parameters
@@ -82,6 +83,9 @@ opt.model_dir = os.path.join(opt.model_dir, 'Reasoning', opt.exp_name)
 seed_everything(opt.seed)
 
 # dataset path setting =====================================
+
+if opt.quantize: opt.implicit = True
+
 
 # set information based on dataset and it variant
 if opt.dataset_name == 'clevr':

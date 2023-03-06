@@ -23,7 +23,7 @@ def str2bool(v):
 
 parser.add_argument('--batch_size', default=40, type=int)
 parser.add_argument('--num_batches', default=1000, type=int)
-parser.add_argument('--num_slots', default=10, type=int)
+parser.add_argument('--num_slots', default=4, type=int)
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 
 opt = parser.parse_args()
@@ -83,14 +83,30 @@ def get_computational_fid(config):
                                 device      = device,
                                 batch_size  = opt.batch_size,
                                 num_batches = opt.num_batches,
-                                fid_dir     = os.path.join('LOGS-IMAGECOMPOSITION', exp_arguments['exp_name']))
+                                fid_dir     = os.path.join(f'LOGS-IMAGECOMPOSITION-ns-{opt.num_slots}', exp_arguments['exp_name']))
 
     print(CFID, CSFID, '====================')
     return CFID, CSFID
 
 
 if __name__ == '__main__':
-    configs = ['/vol/biomedic3/agk21/testEigenSlots2/LOGS-NOIMPLICIT/ObjectDiscovery/tetrominoesdefaultCosine/exp-parameters.json']
+    configs = [
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/bitmojidefaultCosine/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/bitmojidefaultEuclidian/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/bitmojidefaultGumble/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/clevrdefaultEuclidian/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/clevrdefaultCosine/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/clevrdefaultGumble/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/objects_roomdefaultCosine/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/objects_roomdefaultEuclidian/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/objects_roomdefaultGumble/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/tetrominoesdefaultCosine/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/tetrominoesdefaultEuclidian/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/tetrominoesdefaultGumble/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/ffhqdefaultCosine/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/ffhqdefaultEuclidian/exp-parameters.json',
+                '/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMPLICIT2/ObjectDiscovery/ffhqdefaultGumble/exp-parameters.json',
+                ]
     
     cfids = []
     csfids = []
@@ -102,4 +118,4 @@ if __name__ == '__main__':
         csfids.append(sfid)
 
         df = pd.DataFrame({'config': configs[:i+1], 'CFID': cfids, 'CSFID': csfids})
-        df.to_csv('./compositional_fids_allconfigs.csv')
+        df.to_csv(f'/vol/biomedic3/agk21/testEigenSlots2/CSVS/compositional_fids_{opt.num_slots}.csv')

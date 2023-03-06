@@ -420,6 +420,8 @@ class SlotAttention(nn.Module):
 
         # Input features ===========================
         inputs = self.slot_quantizer.get_encodings(encodings)
+        inputs += torch.mean(torch.norm(inputs, 1))*0.05*torch.randn_like(inputs)
+        
         inputs = inputs.view(b, w, h, d).permute(0,3,1,2)
         inputs = self.encoder_transformation(inputs, position=True)
         inputs = self.norm_input(inputs)
@@ -439,7 +441,7 @@ class SlotAttention(nn.Module):
         for _ in range(self.iters):
             slots = self.step(slots, k, v, MCsamples, n_s, b)
 
-        if self.implicit: slots = self.step(slots.detach(), k, v)
+        if self.implicit: slots = self.step(slots.detach(), k, v, MCsamples, n_s, b)
 
         return slots, slot_idxs, qloss, perplexity, self.decoder_transformation(slots)
 
@@ -710,19 +712,17 @@ class SlotAttentionAutoEncoder(nn.Module):
         return recon_combined, recons, masks, slots, cbidxs, qloss, perplexity
 
 
-    def object_composition(self, idxs=None, n_s=7, b=32, device=0):
+    def object_composition(self, prior=None, idxs=None, n_s=7, b=32, device=0):
         
         if not self.quantize: 
             raise 'Baseline slot attention does not support object composition' 
 
         if idxs == None:
-            # rand_idxs = []
-            # idxs = np.arange(self.max_slots)
-            # for _ in range(b):
-            #     np.random.shuffle(idxs)
-            #     rand_idxs.append(idxs[:(self.encoder_res**2)])
+            if prior is None:
+                rand_idxs = np.random.randint(0, self.max_slots, (b, self.encoder_res**2))
+            else:
+                rand_idxs = np.random.choice(prior, b*self.encoder_res**2).reshape(b, self.encoder_res**2)
             
-            rand_idxs = np.random.randint(0, self.max_slots, (b, self.encoder_res**2))
             slot_idxs = torch.tensor(rand_idxs).to(device)
         else:
             slot_idxs = torch.tensor(idxs).to(device)

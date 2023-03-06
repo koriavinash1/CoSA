@@ -34,6 +34,7 @@ parser.add_argument('--seed', default=0, type=int, help='random seed')
 parser.add_argument('--dataset_name', default='clevr', type=str, help='where to save models' )
 parser.add_argument('--variant', default='hans3', type=str, help='where to save models' )
 parser.add_argument('--img_size', default=128, type=int, help='image size')
+parser.add_argument('--nclasses', default=3, type=int, help='number of classes')
 
 # model information
 parser.add_argument('--kernel_size', default=5, type=int, help='convolutional kernel size')
@@ -42,8 +43,8 @@ parser.add_argument('--hid_dim', default=64, type=int, help='hidden dimension si
 
 # training parameters
 parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
-parser.add_argument('--learning_rate', default=0.001, type=float, help='training learning rate')
-parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
+parser.add_argument('--learning_rate', default=0.0001, type=float, help='training learning rate')
+parser.add_argument('--num_epochs', default=500, type=int, help='number of workers for loading data')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 
 # unused parameters
@@ -53,7 +54,7 @@ parser.add_argument('--decay_steps', default=100000, type=int, help='Number of s
 
 
 opt = parser.parse_args()
-opt.model_dir = os.path.join(opt.model_dir, 'BaselineClassifier', opt.exp_name)
+opt.model_dir = os.path.join(opt.model_dir, 'Reasoning', opt.exp_name)
 
 
 seed_everything(opt.seed)
@@ -65,14 +66,17 @@ if opt.dataset_name == 'clevr':
     opt.encoder_res = 4
     opt.decoder_res = 4
     opt.img_size = 128
-    opt.max_slots = 19
+    opt.max_slots = 64
     opt.kernel_size = 5
     opt.num_slots = 7
     opt.nunique_objects = 16
+    opt.nproperties = 19
 
     if opt.variant == 'hans3':
+        opt.nclasses = 3
         opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans3'
     elif opt.variant == 'hans7':
+        opt.nclasses = 7
         opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/CLEVR/CLEVR-Hans7'
 
 elif opt.dataset_name == 'ffhq':
@@ -84,6 +88,8 @@ elif opt.dataset_name == 'ffhq':
     opt.num_slots = 7
     opt.nunique_objects = 15
     opt.kernel_size = 5
+    opt.nproperties = 21
+    opt.nclasses = 2
     opt.data_root = '/vol/biomedic2/agk21/PhDLogs/datasets/FFHQ/data'
 
 
@@ -93,16 +99,29 @@ elif opt.dataset_name == 'floatingMNIST':
     opt.img_size = 64
     opt.kernel_size = 3
     opt.max_slots = 11
+    opt.nproperties = 11
 
     if opt.variant == 'n2':
         opt.num_slots = 3
         opt.nunique_objects = 3
         opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST2'
+        if opt.reasoning_type == 'diff':
+            opt.nclasses = 10
+        elif opt.reasoning_type == 'mixed':
+            opt.nclasses = 25
+        else:
+            opt.nclasses = 19
+
     elif opt.variant == 'n3':
         opt.num_slots = 4
         opt.nunique_objects = 4
         opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST3'
-
+        if opt.reasoning_type == 'diff':
+            opt.nclasses = 28
+        elif opt.reasoning_type == 'mixed':
+            opt.nclasses = 38
+        else:
+            opt.nclasses = 28
 else:
     raise ValueError('Invalid dataset found')
 
@@ -135,7 +154,8 @@ writer.add_text('hparams', arg_str)
 model = DefaultCNN(resolution = resolution, 
                         hid_dim =  opt.hid_dim,
                         encoder_res =  opt.encoder_res,
-                        kernel_size = opt.kernel_size).to(device)
+                        kernel_size = opt.kernel_size,
+                        nclasses = opt.nclasses).to(device)
 
 
 model.device = device
@@ -153,6 +173,7 @@ train_set = DataGenerator(root=opt.data_root,
 train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
                         shuffle=True, num_workers=opt.num_workers, drop_last=True)
 
+
 val_set = DataGenerator(root=opt.data_root, 
                             mode='val',  
                             max_objects = opt.num_slots,
@@ -160,7 +181,7 @@ val_set = DataGenerator(root=opt.data_root,
                             class_info=True,
                             resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
+                        shuffle=False, num_workers=opt.num_workers, drop_last=True)
 
 test_set = DataGenerator(root=opt.data_root, 
                             mode='test',  
@@ -169,8 +190,7 @@ test_set = DataGenerator(root=opt.data_root,
                             class_info=True,
                             resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
-                        shuffle=True, num_workers=opt.num_workers, drop_last=True)
-
+                        shuffle=False, num_workers=opt.num_workers, drop_last=True)
 
 train_epoch_size = min(50000, len(train_dataloader))
 val_epoch_size = min(10000, len(val_dataloader))
@@ -244,12 +264,13 @@ def validation_step(model, optimizer, epoch, opt):
 start = time.time()
 min_recon_loss = 1000000.0
 counter = 0
-patience = 15
+patience = 3
 lrscheduler = ReduceLROnPlateau(optimizer, 'min', 
                                 patience=patience,
                                 factor=0.5,
                                 verbose = True)
 
+history = {'EP':[], 'RLOSS': [], 'ACC': [], 'F1': []}
 
 for epoch in range(opt.num_epochs):
     model.train()
@@ -342,3 +363,14 @@ for epoch in range(opt.num_epochs):
 
             writer.add_scalar('VALID/Acc', acc, epoch//every_nepoch)
             writer.add_scalar('VALID/F1', f1, epoch//every_nepoch)
+
+        # update csv_data=========================
+
+        history['EP'].append(epoch)
+        history['RLOSS'].append(validation_stats['total_loss'])
+        history['ACC'].append(acc)
+        history['F1'].append(f1)
+
+        # update logs--------------------------
+        df = pd.DataFrame(history)
+        df.to_csv(os.path.join(opt.model_dir, 'logs.csv')) 

@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *Logs*
+*PLOTS*
 *LOG*
 *.pth
 *.ipynb_checkpoints
@@ -11,19 +12,6 @@ __pycache__/
 *.so
 *.csv
 
-*.csv
-
-*.csv
-
-*.csv
-
-*.csv
-
-*.csv
-
-*.csv
-
-*.csv
 
 
 # Distribution / packaging

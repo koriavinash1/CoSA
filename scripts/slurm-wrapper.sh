@@ -29,6 +29,11 @@ elif [ $1 == 'RE' ]
 then
     echo "Task-$1"
     ./run-re.sh $2 $3 $4 $5 $6 $7 $8 $9 ${10} ${11} ${12} ${13} ${14} ${15} ${16} ${17}
+elif [ $1 == 'OC' ]
+then
+    echo "Task-$1"
+    python /vol/biomedic3/agk21/testEigenSlots2/slot_composition.py
+
 fi
 
 EOT
