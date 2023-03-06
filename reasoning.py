@@ -9,7 +9,8 @@ from tqdm import tqdm
 import time, math
 from datetime import datetime, timedelta
 from torch.nn.utils import clip_grad_norm_
-
+import pandas as pd
+import numpy as np
 import torch.optim as optim
 import torch
 import torch.nn.functional as F
@@ -28,7 +29,7 @@ def str2bool(v):
 
 
 # exp setup information
-parser.add_argument('--model_dir', default='Logs', type=str, help='where to save models' )
+parser.add_argument('--model_dir', default='LOGSReasoning', type=str, help='where to save models' )
 parser.add_argument('--exp_name', default='test', type=str, help='where to save models' )
 parser.add_argument('--seed', default=0, type=int, help='random seed')
 
@@ -64,7 +65,7 @@ parser.add_argument('--kld_scale', type=float, default=1.0, help='kl distance we
 # training parameters
 parser.add_argument('--batch_size', default=16, type=int, help='training mini-batch size')
 parser.add_argument('--learning_rate', default=0.0004, type=float, help='training learning rate')
-parser.add_argument('--num_epochs', default=1000, type=int, help='number of workers for loading data')
+parser.add_argument('--num_epochs', default=40, type=int, help='number of workers for loading data')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers for loading data')
 parser.add_argument('--implicit', type=str2bool, default=False, help="use implicit neumann's approximation for computing fixed point")
 
@@ -246,6 +247,7 @@ opt.log_interval = train_epoch_size // 5
 
 def training_step(model, optimizer, epoch, opt):
     idxs = []
+    cbd = 0; cbp = 0
     total_loss = 0; reasoning_loss = 0; recon_loss = 0; property_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(train_dataloader)):
         global_step = epoch * train_epoch_size + ibatch
@@ -265,6 +267,13 @@ def training_step(model, optimizer, epoch, opt):
         reasoning_loss += rloss.item()
         quant_loss += qloss.item()
         total_loss += loss.item()
+
+        if opt.quantize:
+            cbd_ = get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item()
+        else: cbd_ = 0.0        
+
+        cbd += cbd_
+        cbp += perplexity.item()
 
         # =================
 
@@ -281,7 +290,7 @@ def training_step(model, optimizer, epoch, opt):
                 writer.add_scalar('TRAIN/rloss', rloss.item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/quant', qloss.item(), global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/cbp', perplexity.item(), global_step)
-                if opt.quantize: writer.add_scalar('TRAIN/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+                if opt.quantize: writer.add_scalar('TRAIN/cbd', cbd_, global_step)
                 if opt.quantize: writer.add_scalar('TRAIN/Samplingvar', len(torch.unique(cbidxs)), global_step)
                 writer.add_scalar('TRAIN/lr', optimizer.param_groups[0]['lr'], global_step)
         
@@ -290,6 +299,8 @@ def training_step(model, optimizer, epoch, opt):
     return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
                         'reasoning_loss': reasoning_loss*1.0/train_epoch_size,
                         'quant_loss': quant_loss*1.0/train_epoch_size,
+                        'cbd': cbd*1.0/train_epoch_size,
+                        'cbp': cbp*1.0/train_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
 
     return return_stats
@@ -298,8 +309,9 @@ def training_step(model, optimizer, epoch, opt):
 @torch.no_grad()
 def validation_step(model, optimizer, epoch, opt):
     idxs = []
+    cbp = 0; cbd = 0
     total_loss = 0; reasoning_loss = 0; recon_loss = 0; property_loss = 0; quant_loss = 0; overlap_loss = 0
-    for ibatch, sample in tqdm(enumerate(train_dataloader)):
+    for ibatch, sample in tqdm(enumerate(val_dataloader)):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
         labels = sample['target'].to(device)
@@ -320,6 +332,13 @@ def validation_step(model, optimizer, epoch, opt):
         total_loss += loss.item()
         # =================
 
+        if opt.quantize:
+            cbd_ = get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item()
+        else: cbd_ = 0.0
+        cbd += cbd_
+        cbp += perplexity.item()
+
+
         idxs.append(cbidxs)
 
         if ibatch % opt.log_interval == 0:            
@@ -327,7 +346,7 @@ def validation_step(model, optimizer, epoch, opt):
             writer.add_scalar('VALID/rloss', rloss.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/quant', qloss.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/cbp', perplexity.item(), global_step)
-            if opt.quantize: writer.add_scalar('VALID/cbd', get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item(), global_step)
+            if opt.quantize: writer.add_scalar('VALID/cbd', cbd_, global_step)
             if opt.quantize: writer.add_scalar('VALID/Samplingvar', len(torch.unique(cbidxs)), global_step)
             writer.add_scalar('VALID/lr', optimizer.param_groups[0]['lr'], global_step)
 
@@ -336,6 +355,8 @@ def validation_step(model, optimizer, epoch, opt):
     return_stats = {'total_loss': total_loss*1.0/train_epoch_size,
                         'reasoning_loss': reasoning_loss*1.0/train_epoch_size,
                         'quant_loss': quant_loss*1.0/train_epoch_size,
+                        'cbd': cbd*1.0/val_epoch_size,
+                        'cbp': cbp*1.0/val_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
     return return_stats
 
@@ -346,8 +367,9 @@ start = time.time()
 min_rloss = 1000000.0
 min_recon_loss = 1000000.0
 counter = 0
-patience = 15
+patience = 3
 
+history = {'EP':[], 'RLOSS': [], 'CBD': [], 'CBP': [], 'ACC': [], 'F1': [], 'QLOSS': []}
 
 for epoch in range(opt.num_epochs):
     model.train()
@@ -366,7 +388,7 @@ for epoch in range(opt.num_epochs):
                                                         epoch, 
                                                         validation_stats
                                                         ))
-    print ('='*50)
+    print ('='*150)
 
 
      # warm up learning rate setup
@@ -387,6 +409,7 @@ for epoch in range(opt.num_epochs):
             min_rloss = validation_stats['reasoning_loss']
             torch.save({
                 'model_state_dict': model.state_dict(),
+                'optm_state_dict': optimizer.state_dict(),
                 'epoch': epoch,
                 'vstats': validation_stats,
                 'tstats': training_stats, 
@@ -403,6 +426,7 @@ for epoch in range(opt.num_epochs):
 
     torch.save({
         'model_state_dict': model.state_dict(),
+        'optm_state_dict': optimizer.state_dict(),
         'epoch': epoch,
         'vstats': validation_stats,
         'tstats': training_stats, 
@@ -418,7 +442,7 @@ for epoch in range(opt.num_epochs):
 
             pred = []; attributes = []
             for batch_num, samples in tqdm(enumerate(test_dataloader), desc='calculating Acc-F1 '):
-                if batch_num > 50: break
+                if batch_num*opt.batch_size > 2500: break
 
                 image = samples['image'].to(model.device)
                 targets = samples['target'].to(model.device)
@@ -441,3 +465,17 @@ for epoch in range(opt.num_epochs):
 
             writer.add_scalar('VALID/Acc', acc, epoch//every_nepoch)
             writer.add_scalar('VALID/F1', f1, epoch//every_nepoch)
+
+        # update csv_data=========================
+
+        history['EP'].append(epoch)
+        history['RLOSS'].append(validation_stats['reasoning_loss'])
+        history['CBD'].append(validation_stats['cbd'])
+        history['CBP'].append(validation_stats['cbp'])
+        history['ACC'].append(acc)
+        history['F1'].append(f1)
+        history['QLOSS'].append(validation_stats['quant_loss'])
+
+        # update logs--------------------------
+        df = pd.DataFrame(history)
+        df.to_csv(os.path.join(opt.model_dir, 'logs.csv')) 

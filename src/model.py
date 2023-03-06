@@ -1049,13 +1049,19 @@ class SlotAttentionReasoning(nn.Module):
                                 kld_scale=kld_scale)
 
 
-        self.classifier = ReasoningClassifier(self.hid_dim, 
+        if self.quantize:
+            self.classifier = ReasoningClassifier(self.hid_dim, 
                                                 max_slots,
                                                 nproperties, 
                                                 nclasses,
                                                 num_slots)
-    
-    
+
+        else:
+            self.classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(hid_dim, nclasses))
+
+
 
     def forward(self, image, 
                     num_slots=None, 
@@ -1089,7 +1095,10 @@ class SlotAttentionReasoning(nn.Module):
         slots = slots.view(image.shape[0], MCsamples, n_s, -1)
         slots = slots.mean(1)
 
-        predictions = self.classifier(slots, cbidxs, epoch, batch)
+        if self.quantize:
+            predictions = self.classifier(slots, cbidxs, epoch, batch)
+        else:
+            predictions = self.classifier(slots.mean(1))
         return predictions, cbidxs, qloss, perplexity
 
 

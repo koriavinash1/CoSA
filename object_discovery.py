@@ -475,6 +475,7 @@ for epoch in range(opt.num_epochs):
 
         torch.save({
             'model_state_dict': model.state_dict(),
+            'optm_state_dict': optimizer.state_dict(),
             'epoch': epoch,
             'vstats': validation_stats,
             'tstats': training_stats, 
