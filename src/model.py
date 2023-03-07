@@ -421,7 +421,7 @@ class SlotAttention(nn.Module):
         # Input features ===========================
         inputs = self.slot_quantizer.get_encodings(encodings)
         inputs += torch.mean(torch.norm(inputs, 1))*0.05*torch.randn_like(inputs)
-        
+
         inputs = inputs.view(b, w, h, d).permute(0,3,1,2)
         inputs = self.encoder_transformation(inputs, position=True)
         inputs = self.norm_input(inputs)
@@ -982,10 +982,9 @@ class ReasoningClassifier(nn.Module):
         properties = F.relu(torch.einsum('bnd,bndw->bnw', slots, fc1w) + fc1b)
         properties = F.relu(torch.einsum('bnd,bndw->bnw', properties, fc2w) + fc2b) 
 
-        properties = torch.einsum('bnp,bnp->bp', properties, attn)
-        class_logits = self.reasoning_classifier(properties)
+        class_logits = self.reasoning_classifier(torch.einsum('bnp,bnp->bp', properties, attn))
 
-        return class_logits
+        return class_logits, properties
 
 
 
@@ -1049,6 +1048,7 @@ class SlotAttentionReasoning(nn.Module):
                                 kld_scale=kld_scale)
 
 
+
         if self.quantize:
             self.classifier = ReasoningClassifier(self.hid_dim, 
                                                 max_slots,
@@ -1057,9 +1057,13 @@ class SlotAttentionReasoning(nn.Module):
                                                 num_slots)
 
         else:
-            self.classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
+            self.properties = nn.Sequential(nn.Linear(hid_dim, hid_dim),
                                         nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, nclasses))
+                                        nn.Linear(hid_dim, nproperties))
+
+            self.classifier = nn.Sequential(nn.Linear(nproperties, nproperties),
+                                        nn.ReLU(inplace=True),
+                                        nn.Linear(nproperties, nclasses))
 
 
 
@@ -1096,10 +1100,11 @@ class SlotAttentionReasoning(nn.Module):
         slots = slots.mean(1)
 
         if self.quantize:
-            predictions = self.classifier(slots, cbidxs, epoch, batch)
+            predictions, properties = self.classifier(slots, cbidxs, epoch, batch)
         else:
-            predictions = self.classifier(slots.mean(1))
-        return predictions, cbidxs, qloss, perplexity
+            properties = self.properties(slots)
+            predictions = self.classifier(properties.mean(1))
+        return predictions, torch.sigmoid(properties), cbidxs, qloss, perplexity
 
 
 

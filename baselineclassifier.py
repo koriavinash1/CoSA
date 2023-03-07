@@ -11,6 +11,7 @@ from torch.nn.utils import clip_grad_norm_
 
 import torch.optim as optim
 import torch
+import pandas as pd
 import torch.nn.functional as F
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
@@ -35,6 +36,7 @@ parser.add_argument('--dataset_name', default='clevr', type=str, help='where to 
 parser.add_argument('--variant', default='hans3', type=str, help='where to save models' )
 parser.add_argument('--img_size', default=128, type=int, help='image size')
 parser.add_argument('--nclasses', default=3, type=int, help='number of classes')
+parser.add_argument('--reasoning_type', default='default', type=str, help='total number classes clevr dataset')
 
 # model information
 parser.add_argument('--kernel_size', default=5, type=int, help='convolutional kernel size')
@@ -60,7 +62,6 @@ opt.model_dir = os.path.join(opt.model_dir, 'Reasoning', opt.exp_name)
 seed_everything(opt.seed)
 
 # dataset path setting =====================================
-
 # set information based on dataset and it variant
 if opt.dataset_name == 'clevr':
     opt.encoder_res = 4
@@ -81,9 +82,9 @@ if opt.dataset_name == 'clevr':
 
 elif opt.dataset_name == 'ffhq':
     opt.variant ='default'
-    opt.encoder_res = 8
-    opt.decoder_res = 8
-    opt.img_size = 64
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 128
     opt.max_slots = 64
     opt.num_slots = 7
     opt.nunique_objects = 15
@@ -94,9 +95,9 @@ elif opt.dataset_name == 'ffhq':
 
 
 elif opt.dataset_name == 'floatingMNIST':
-    opt.encoder_res = 8
-    opt.decoder_res = 8
-    opt.img_size = 64
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 128
     opt.kernel_size = 3
     opt.max_slots = 11
     opt.nproperties = 11
@@ -108,7 +109,7 @@ elif opt.dataset_name == 'floatingMNIST':
         if opt.reasoning_type == 'diff':
             opt.nclasses = 10
         elif opt.reasoning_type == 'mixed':
-            opt.nclasses = 25
+            opt.nclasses = 29
         else:
             opt.nclasses = 19
 
@@ -117,14 +118,13 @@ elif opt.dataset_name == 'floatingMNIST':
         opt.nunique_objects = 4
         opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST3'
         if opt.reasoning_type == 'diff':
-            opt.nclasses = 28
+            opt.nclasses = 19
         elif opt.reasoning_type == 'mixed':
-            opt.nclasses = 38
+            opt.nclasses = 44
         else:
             opt.nclasses = 28
 else:
     raise ValueError('Invalid dataset found')
-
 
 # =========================================================
 # Dump exp config into json and tensorboard logs....
@@ -152,7 +152,7 @@ writer.add_text('hparams', arg_str)
 # model init
 
 model = DefaultCNN(resolution = resolution, 
-                        hid_dim =  opt.hid_dim,
+                        hid_dim =  opt.nproperties,
                         encoder_res =  opt.encoder_res,
                         kernel_size = opt.kernel_size,
                         nclasses = opt.nclasses).to(device)
@@ -167,6 +167,7 @@ params = [{'params': model.parameters()}]
 train_set = DataGenerator(root=opt.data_root, 
                             mode='train', 
                             max_objects = opt.num_slots,
+                            reasoning_type = opt.reasoning_type,
                             properties=False,
                             class_info=True,
                             resolution=resolution)
@@ -177,6 +178,7 @@ train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_s
 val_set = DataGenerator(root=opt.data_root, 
                             mode='val',  
                             max_objects = opt.num_slots,
+                            reasoning_type = opt.reasoning_type,
                             properties=False,
                             class_info=True,
                             resolution=resolution)
@@ -186,6 +188,7 @@ val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
 test_set = DataGenerator(root=opt.data_root, 
                             mode='test',  
                             max_objects = opt.num_slots,
+                            reasoning_type = opt.reasoning_type,
                             properties=False,
                             class_info=True,
                             resolution=resolution)
@@ -237,7 +240,7 @@ def training_step(model, optimizer, epoch, opt):
 @torch.no_grad()
 def validation_step(model, optimizer, epoch, opt):
     idxs = []
-    total_loss = 0; qloss = 0; property_loss = 0;
+    total_loss = 0; qloss = 0; property_loss = 0
     for ibatch, sample in tqdm(enumerate(val_dataloader)):
         global_step = epoch * val_epoch_size + ibatch
         image = sample['image'].to(device)
@@ -323,12 +326,12 @@ for epoch in range(opt.num_epochs):
                 print('Early Stopping: --------------')
                 break
 
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'epoch': epoch,
-            'vstats': validation_stats,
-            'tstats': training_stats, 
-            }, os.path.join(opt.model_dir, f'baseline_classifier_last.pth'))
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'epoch': epoch,
+        'vstats': validation_stats,
+        'tstats': training_stats, 
+        }, os.path.join(opt.model_dir, f'baseline_classifier_last.pth'))
 
 
 

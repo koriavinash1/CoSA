@@ -73,7 +73,7 @@ class DataGenerator(Dataset):
         self.class_info = class_info
         self.reasoning_type = reasoning_type
 
-        if self.properties:
+        if self.properties and root.lower().__contains__('hans'):
             self.files, self.properties_info = get_paths_with_properties_CLEVR(root, mode, max_objects)
         else:
             path = os.path.join(self.root_dir, self.mode)
@@ -99,11 +99,30 @@ class DataGenerator(Dataset):
         image = self.to_tensor(self.img_transform(image))
         sample = {'image': image}
 
+
+
+        # ====================================
         if self.properties:
-            property_info = self.properties_info[index]
+            if path.lower().__contains__('hans'):
+                property_info = self.properties_info[index]
+            elif path.lower().__contains__('mnist'):
+                property_info = []
+                for d in path.split('/')[-1].split('_'):
+                    if d == 'MNIST': break
+                    property_info.append(np.eye(11)[int(d)])
+
+                # background property
+                property_info.append(np.eye(11)[-1])
+                property_info = np.array(property_info)
+
             property_info = torch.from_numpy(property_info)
             sample['properties'] = property_info
 
+
+
+
+
+        # ====================================
         if self.class_info:
             if path.lower().__contains__('hans'):
                 target = int(path.split('/')[-1].split('_')[3])
@@ -113,15 +132,20 @@ class DataGenerator(Dataset):
                     if d == 'MNIST': break
                     digits.append(int(d))
 
-                if self.reasoning_type == 'sum':
-                    target = np.sum(digits)
-                elif self.reasoning_type == 'diff':
-                    target = np.abs(np.diff(digits))
+                digits = np.sort(digits)[::-1]
+                if self.reasoning_type == 'diff':
+                    target = digits[0]
+                    for digit in digits[1:]:
+                        target -= digit
                 elif self.reasoning_type == 'mixed':
                     target = 0
                     for digit in digits:
                         if digit > 5: target -= digit
                         else: target += digit
+                    
+                    target += len(digits)*9
+                else:
+                    target = np.sum(digits)
 
             sample['target'] = target   
 

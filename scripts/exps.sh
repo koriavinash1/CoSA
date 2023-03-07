@@ -108,3 +108,9 @@ TASKTYPE='RE'
 
 ./slurm-wrapper.sh $TASKTYPE clevr hans3 default
 ./slurm-wrapper.sh $TASKTYPE clevr hans7 default
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n2 add
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n2 diff
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n2 mixed
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n3 add
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n3 diff
+./slurm-wrapper.sh $TASKTYPE floatingMNIST n3 mixed

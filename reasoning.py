@@ -2,7 +2,7 @@ import os
 import argparse
 from src.dataset import *
 from src.model import SlotAttentionReasoning
-from src.metrics import average_precision_clevr, accuracy, dice_loss, calculate_fid
+from src.metrics import average_precision_clevr, accuracy, dice_loss, calculate_fid, ReliableReasoningIndex
 from src.utils import seed_everything, get_cb_variance, create_histogram, linear_warmup, visualize
 
 from tqdm import tqdm
@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 import torch.optim as optim
 import torch
+import pandas as pd
 import torch.nn.functional as F
 import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
@@ -107,9 +108,9 @@ if opt.dataset_name == 'clevr':
 
 elif opt.dataset_name == 'ffhq':
     opt.variant ='default'
-    opt.encoder_res = 8
-    opt.decoder_res = 8
-    opt.img_size = 64
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 128
     opt.max_slots = 64
     opt.num_slots = 7
     opt.nunique_objects = 15
@@ -120,9 +121,9 @@ elif opt.dataset_name == 'ffhq':
 
 
 elif opt.dataset_name == 'floatingMNIST':
-    opt.encoder_res = 8
-    opt.decoder_res = 8
-    opt.img_size = 64
+    opt.encoder_res = 4
+    opt.decoder_res = 4
+    opt.img_size = 128
     opt.kernel_size = 3
     opt.max_slots = 11
     opt.nproperties = 11
@@ -134,7 +135,7 @@ elif opt.dataset_name == 'floatingMNIST':
         if opt.reasoning_type == 'diff':
             opt.nclasses = 10
         elif opt.reasoning_type == 'mixed':
-            opt.nclasses = 25
+            opt.nclasses = 29
         else:
             opt.nclasses = 19
 
@@ -143,9 +144,9 @@ elif opt.dataset_name == 'floatingMNIST':
         opt.nunique_objects = 4
         opt.data_root = '/vol/biomedic3/agk21/datasets/FloatingMNIST3'
         if opt.reasoning_type == 'diff':
-            opt.nclasses = 28
+            opt.nclasses = 19
         elif opt.reasoning_type == 'mixed':
-            opt.nclasses = 38
+            opt.nclasses = 44
         else:
             opt.nclasses = 28
 else:
@@ -213,7 +214,8 @@ lrscheduler = ReduceLROnPlateau(optimizer, 'min')
 train_set = DataGenerator(root=opt.data_root, 
                             mode='train', 
                             max_objects = opt.num_slots,
-                            properties=False,
+                            reasoning_type = opt.reasoning_type,
+                            properties=True,
                             class_info=True,
                             resolution=resolution)
 train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size,
@@ -222,7 +224,8 @@ train_dataloader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_s
 val_set = DataGenerator(root=opt.data_root, 
                             mode='val',  
                             max_objects = opt.num_slots,
-                            properties=False,
+                            reasoning_type = opt.reasoning_type,
+                            properties=True,
                             class_info=True,
                             resolution=resolution)
 val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
@@ -231,7 +234,8 @@ val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size,
 test_set = DataGenerator(root=opt.data_root, 
                             mode='test',  
                             max_objects = opt.num_slots,
-                            properties=False,
+                            reasoning_type = opt.reasoning_type,
+                            properties=True,
                             class_info=True,
                             resolution=resolution)
 test_dataloader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size,
@@ -260,7 +264,7 @@ def training_step(model, optimizer, epoch, opt):
 
         MCsamples = 1
         # ================
-        predictions, cbidxs, qloss, perplexity = model(image, 
+        predictions, properties, cbidxs, qloss, perplexity = model(image, 
                                                         MCsamples = MCsamples,
                                                         epoch=epoch, 
                                                         batch=ibatch)
@@ -271,6 +275,7 @@ def training_step(model, optimizer, epoch, opt):
         reasoning_loss += rloss.item()
         quant_loss += qloss.item()
         total_loss += loss.item()
+
 
         if opt.quantize:
             cbd_ = get_cb_variance(model.slot_attention.slot_quantizer._embedding.weight).item()
@@ -313,27 +318,34 @@ def training_step(model, optimizer, epoch, opt):
 @torch.no_grad()
 def validation_step(model, optimizer, epoch, opt):
     idxs = []
-    cbp = 0; cbd = 0
+    cbp = 0; cbd = 0; rri = 0
     total_loss = 0; reasoning_loss = 0; recon_loss = 0; property_loss = 0; quant_loss = 0; overlap_loss = 0
     for ibatch, sample in tqdm(enumerate(val_dataloader)):
         global_step = epoch * train_epoch_size + ibatch
         image = sample['image'].to(device)
         labels = sample['target'].to(device)
+        target_properties = sample['properties'].to(device)
+
+
         MCsamples = 1
 
         # ================
-        predictions, cbidxs, qloss, perplexity = model(image, 
+        predictions, properties, cbidxs, qloss, perplexity = model(image, 
                                                         MCsamples = MCsamples,
                                                         epoch=epoch, 
                                                         batch=ibatch)
         
         rloss = F.cross_entropy(predictions, labels)
+        rri_  = ReliableReasoningIndex(properties, target_properties)
+
         loss = rloss + qloss
 
 
         reasoning_loss += rloss.item()
         quant_loss += qloss.item()
         total_loss += loss.item()
+        rri += rri_.item()
+
         # =================
 
         if opt.quantize:
@@ -348,6 +360,7 @@ def validation_step(model, optimizer, epoch, opt):
         if ibatch % opt.log_interval == 0:            
             writer.add_scalar('VALID/loss', loss.item(), global_step)
             writer.add_scalar('VALID/rloss', rloss.item(), global_step)
+            writer.add_scalar('VALID/rri', rri_.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/quant', qloss.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/cbp', perplexity.item(), global_step)
             if opt.quantize: writer.add_scalar('VALID/cbd', cbd_, global_step)
@@ -361,6 +374,7 @@ def validation_step(model, optimizer, epoch, opt):
                         'quant_loss': quant_loss*1.0/train_epoch_size,
                         'cbd': cbd*1.0/val_epoch_size,
                         'cbp': cbp*1.0/val_epoch_size,
+                        'rri': rri*1.0/train_epoch_size,
                         'unique_idxs': torch.unique(idxs).cpu().numpy()}
     return return_stats
 
@@ -373,7 +387,7 @@ min_recon_loss = 1000000.0
 counter = 0
 patience = 3
 
-history = {'EP':[], 'RLOSS': [], 'CBD': [], 'CBP': [], 'ACC': [], 'F1': [], 'QLOSS': []}
+history = {'EP':[], 'RLOSS': [], 'CBD': [], 'CBP': [], 'ACC': [], 'F1': [], 'RRI': [], 'QLOSS': []}
 
 for epoch in range(opt.num_epochs):
     model.train()
@@ -451,7 +465,7 @@ for epoch in range(opt.num_epochs):
                 image = samples['image'].to(model.device)
                 targets = samples['target'].to(model.device)
 
-                logits, cbidxs, qloss, perplexity = model(image, MCsamples=1)
+                logits, properties, cbidxs, qloss, perplexity = model(image, MCsamples=1)
 
                 attributes.append(targets)
                 pred.append(torch.argmax(logits, -1))
@@ -476,10 +490,12 @@ for epoch in range(opt.num_epochs):
         history['RLOSS'].append(validation_stats['reasoning_loss'])
         history['CBD'].append(validation_stats['cbd'])
         history['CBP'].append(validation_stats['cbp'])
+        history['RRI'].append(validation_stats['rri'])
         history['ACC'].append(acc)
         history['F1'].append(f1)
         history['QLOSS'].append(validation_stats['quant_loss'])
 
         # update logs--------------------------
         df = pd.DataFrame(history)
-        df.to_csv(os.path.join(opt.model_dir, 'logs.csv')) 
+        df.to_csv(os.path.join(opt.model_dir, 'logs.csv'))
+        print ('DF Updated ============ ', os.path.join(opt.model_dir, 'logs.csv'))

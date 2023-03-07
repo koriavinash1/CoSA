@@ -5,6 +5,9 @@ import numpy as np
 import torchvision
 from shutil import rmtree
 from tqdm import tqdm
+import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
+
 from pytorch_fid import fid_score
 from sklearn.metrics import accuracy_score
 
@@ -53,6 +56,56 @@ def dice_loss(masks):
             gt_masks[:, i, ...].unsqueeze(1).repeat(1, len(idxs) -1, 1, 1, 1).reshape(-1, shape[2], shape[3], shape[4]))
 
     return loss*1.0/len(idxs)
+
+
+
+@torch.no_grad()
+def ReliableReasoningIndex(x, y):
+    """
+    code conversion from: https://github.com/google-research/google-research/blob/c3bef5045a2d4777a80a1fb333d31e03474222fb/slot_attention/utils.py#L26
+    
+    Huber loss for sets, matching elements with the Hungarian algorithm.
+    This loss is used as reconstruction loss in the paper 'Deep Set Prediction
+    Networks' https://arxiv.org/abs/1906.06565, see Eq. 2. For each element in the
+    batches we wish to compute min_{pi} ||y_i - x_{pi(i)}||^2 where pi is a
+    permutation of the set elements. We first compute the pairwise distances
+    between each point in both sets and then match the elements using the scipy
+    implementation of the Hungarian algorithm. This is applied for every set in
+    the two batches. Note that if the number of points does not match, some of the
+    elements will not be matched. As distance function we use the Huber loss.
+    Args:
+    x: Batch of sets of size [batch_size, n_points, dim_points]. Each set in the
+        batch contains n_points many points, each represented as a vector of
+        dimension dim_points.
+    y: Batch of sets of size [batch_size, n_points, dim_points].
+    Returns:
+    Average distance between all sets in the two batches.
+    """
+
+    # adjust shape for x and y
+    ns = x.shape[1]
+    x = x.unsqueeze(1).repeat(1, ns, 1, 1)
+    y = y.unsqueeze(2).repeat(1, 1, ns, 1)
+    
+    pairwise_cost = F.huber_loss(x, y, reduction='none')
+    # pairwise_cost = F.binary_cross_entropy(x, y, reduction='none')
+    pairwise_cost = pairwise_cost.mean(-1)
+
+    indices = np.array(list(map(linear_sum_assignment, pairwise_cost.clone().detach().cpu().numpy())))
+    transposed_indices = np.transpose(indices, axes=(0, 2, 1))
+
+    transposed_indices = torch.tensor(transposed_indices).to(x.device)
+    pos_h = torch.tensor(transposed_indices)[:,:,0]
+    pos_w = torch.tensor(transposed_indices)[:,:,1]
+    batch_enumeration = torch.arange(x.shape[0])
+    
+    batch_enumeration = batch_enumeration.unsqueeze(1)
+    actual_costs = pairwise_cost[batch_enumeration, pos_h, pos_w]
+    
+    return actual_costs.sum(1).mean()
+
+
+
 
 @torch.no_grad()
 def calculate_fid(loader, model, batch_size=16, num_batches=100, fid_dir='./tmp/CLEVR/FID' ):

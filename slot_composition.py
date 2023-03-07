@@ -83,7 +83,7 @@ def get_computational_fid(config):
                                 device      = device,
                                 batch_size  = opt.batch_size,
                                 num_batches = opt.num_batches,
-                                fid_dir     = os.path.join(f'LOGS-IMAGECOMPOSITION-ns-{opt.num_slots}', exp_arguments['exp_name']))
+                                fid_dir     = os.path.join(f'/vol/biomedic3/agk21/testEigenSlots2/LOGS-IMAGECOMPOSITION/ns-{opt.num_slots}-np2', exp_arguments['exp_name']))
 
     print(CFID, CSFID, '====================')
     return CFID, CSFID
@@ -112,10 +112,10 @@ if __name__ == '__main__':
     csfids = []
 
     for i, config in enumerate(configs):
-        fid, sfid = get_computational_fid(config)
-
+        try: fid, sfid = get_computational_fid(config)
+        except: pass
         cfids.append(fid)
         csfids.append(sfid)
 
         df = pd.DataFrame({'config': configs[:i+1], 'CFID': cfids, 'CSFID': csfids})
-        df.to_csv(f'/vol/biomedic3/agk21/testEigenSlots2/CSVS/compositional_fids_{opt.num_slots}.csv')
+        df.to_csv(f'/vol/biomedic3/agk21/testEigenSlots2/CSVS/compositional_fids_{opt.num_slots}-np2.csv')
