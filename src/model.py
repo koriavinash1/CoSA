@@ -1061,9 +1061,7 @@ class SlotAttentionReasoning(nn.Module):
                                         nn.ReLU(inplace=True),
                                         nn.Linear(hid_dim, nproperties))
 
-            self.classifier = nn.Sequential(nn.Linear(nproperties, nproperties),
-                                        nn.ReLU(inplace=True),
-                                        nn.Linear(nproperties, nclasses))
+            self.classifier = nn.Sequential(nn.Linear(nproperties, nclasses))
 
 
 
@@ -1129,11 +1127,11 @@ class DefaultCNN(nn.Module):
         else:
             self.encoder_cnn = Encoder(self.resolution, self.hid_dim, kernel_size)
     
-        self.classifier = nn.Sequential(nn.Linear(hid_dim, hid_dim),
-                                        nn.ReLU(inplace=True),
-                                        nn.Linear(hid_dim, self.nclasses))
+        self.classifier = nn.Sequential(nn.Linear(hid_dim, self.nclasses))
 
-    def forward(self, x, epoch=0, batch=0):
+    def forward(self, x, num_slots=None, 
+                    MCsamples = 1,
+                    epoch=0, batch=0):
         features = self.encoder_cnn(x)
         avg_pooled = F.adaptive_avg_pool2d(features, (1,1))
-        return self.classifier(avg_pooled.squeeze())
+        return self.classifier(avg_pooled.squeeze()), features, 0, 0, 0

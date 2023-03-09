@@ -137,6 +137,8 @@ class DataGenerator(Dataset):
                     target = digits[0]
                     for digit in digits[1:]:
                         target -= digit
+
+                    target += (len(digits) - 2)*9
                 elif self.reasoning_type == 'mixed':
                     target = 0
                     for digit in digits:

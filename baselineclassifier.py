@@ -212,7 +212,7 @@ def training_step(model, optimizer, epoch, opt):
         image = sample['image'].to(device)
         labels = sample['target'].to(device)
 
-        predictions = model(image, 
+        predictions, *_ = model(image, 
                                 epoch=epoch, 
                                 batch=ibatch)
 
@@ -246,7 +246,7 @@ def validation_step(model, optimizer, epoch, opt):
         image = sample['image'].to(device)
         labels = sample['target'].to(device)
 
-        predictions = model(image, 
+        predictions, *_ = model(image, 
                                 epoch=epoch, 
                                 batch=ibatch)
 
@@ -346,7 +346,7 @@ for epoch in range(opt.num_epochs):
                 image = samples['image'].to(model.device)
                 targets = samples['target'].to(model.device)
 
-                predictions = model(image, 
+                predictions, *_ = model(image, 
                                         epoch=0, 
                                         batch=batch_num)
 

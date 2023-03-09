@@ -458,42 +458,49 @@ for epoch in range(opt.num_epochs):
         if not epoch  % every_nepoch:
             model.eval()
 
-            pred = []; attributes = []
+            pred = []; attributes = []; properties = []; labels = []
             for batch_num, samples in tqdm(enumerate(test_dataloader), desc='calculating Acc-F1 '):
                 if batch_num*opt.batch_size > 2500: break
 
                 image = samples['image'].to(model.device)
+                ppty  = samples['properties'].to(model.device)
                 targets = samples['target'].to(model.device)
 
-                logits, properties, cbidxs, qloss, perplexity = model(image, MCsamples=1)
+                logits, pred_properties, cbidxs, qloss, perplexity = model(image, MCsamples=1)
 
-                attributes.append(targets)
+                labels.append(targets)
+                attributes.append(ppty)
+                properties.append(pred_properties)
                 pred.append(torch.argmax(logits, -1))
 
-            attributes = torch.cat(attributes, 0).cpu().numpy()
+
             pred = torch.cat(pred, 0).cpu().numpy()
+            labels = torch.cat(labels, 0).cpu().numpy()
 
-            print (attributes.shape, pred.shape)
-            # For evaluating the AP score, we get a batch from the validation dataset.
-           
-            acc = accuracy_score(attributes, pred)
-            f1  = f1_score(attributes, pred, average='macro')
+            attributes = torch.cat(attributes, 0)
+            properties = torch.cat(properties, 0) 
+            print (attributes.shape, pred.shape, labels.shape, properties.shape)
 
-            print("Acc.: {}, F1: {}".format(acc, f1))
+
+            hmc  = ReliableReasoningIndex(properties, attributes)
+            acc = accuracy_score(labels, pred)
+            f1  = f1_score(labels, pred, average='macro')
+
+            print("Acc.: {}, F1: {}, HMC: {}".format(acc, f1, hmc))
 
             writer.add_scalar('VALID/Acc', acc, epoch//every_nepoch)
             writer.add_scalar('VALID/F1', f1, epoch//every_nepoch)
 
         # update csv_data=========================
 
-        history['EP'].append(epoch)
         history['RLOSS'].append(validation_stats['reasoning_loss'])
+        history['QLOSS'].append(validation_stats['quant_loss'])
         history['CBD'].append(validation_stats['cbd'])
         history['CBP'].append(validation_stats['cbp'])
-        history['RRI'].append(validation_stats['rri'])
+        history['EP'].append(epoch)
         history['ACC'].append(acc)
+        history['RRI'].append(hmc)
         history['F1'].append(f1)
-        history['QLOSS'].append(validation_stats['quant_loss'])
 
         # update logs--------------------------
         df = pd.DataFrame(history)
