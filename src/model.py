@@ -200,12 +200,17 @@ class SlotAttention(nn.Module):
         eigen_vectors = torch.flip(eigen_vectors, [1])
         eigen_values = torch.flip(eigen_values, [1])
 
-        # Sign ambiguity
-        for k in range(eigen_vectors.shape[0]):
-            mean_vector = torch.mean((eigen_vectors[:, k] > 0).float(), -1)
-            idxs = (mean_vector > 0.5)*(mean_vector < 1.0)
-            # reverse segment
-            eigen_vectors[idxs, k] = 0 - eigen_vectors[idxs, k]
+        max_indices = torch.argmax(torch.abs(eigen_vectors), dim=1)  # Shape: (batch_size, n)
+
+        # Create a batch index tensor
+        batch_indices = torch.arange(coveriance_matrix.shape[0], device=coveriance_matrix.device).view(-1, 1)  # Shape: (batch_size, 1)
+
+        # Gather the signs of the elements at the max indices
+        signs = torch.sign(eigen_vectors[batch_indices, max_indices, torch.arange(eigen_vectors.shape[2])])  # Shape: (batch_size, n)
+
+        # Reshape signs for broadcasting and apply them to eigen_vectors
+        eigen_vectors = eigen_vectors * signs.unsqueeze(1)  # Shape: (batch_size, n, n)
+
 
         return eigen_vectors, eigen_values
 
